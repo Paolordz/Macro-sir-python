@@ -5,6 +5,9 @@ import pytest
 from analysis.normalization import (
     CatCategory,
     date_only_ex2,
+    InvalidDateValueError,
+    InvalidTimeValueError,
+    InvalidVehicleKeyError,
     normalize,
     normalize_vehiculo_key,
     servicio_id_from_components,
@@ -46,3 +49,14 @@ def test_cat_category_guesses_from_site():
     assert CatCategory.from_raw("Patio Central").nombre == "Patio"
     fallback = CatCategory.from_raw("otros")
     assert fallback.guess_from_site("Taller Norte").nombre == "Taller"
+
+
+def test_strict_mode_raises_specific_errors():
+    with pytest.raises(InvalidDateValueError):
+        date_only_ex2("31/31/2023", "DMY", strict=True)
+
+    with pytest.raises(InvalidTimeValueError):
+        time_to_sec_ex("99:99", strict=True)
+
+    with pytest.raises(InvalidVehicleKeyError):
+        normalize_vehiculo_key("***", strict=True)

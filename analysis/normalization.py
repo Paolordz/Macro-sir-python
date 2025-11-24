@@ -21,10 +21,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from itertools import repeat
+import logging
 import os
 import re
 import unicodedata
 from typing import Iterable, List, Optional, Sequence
+
+
+class NormalizationValueError(ValueError):
+    """Base error for normalization/parsing helpers."""
+
+
+class InvalidDateValueError(NormalizationValueError):
+    """Raised when a date value cannot be parsed in strict mode."""
+
+
+class InvalidTimeValueError(NormalizationValueError):
+    """Raised when a time value cannot be parsed in strict mode."""
+
+
+class InvalidVehicleKeyError(NormalizationValueError):
+    """Raised when a vehicle key cannot be normalized in strict mode."""
 
 
 ACCENT_REPLACEMENTS = str.maketrans(
@@ -73,6 +90,32 @@ ACCENT_REPLACEMENTS = str.maketrans(
         "Ñ": "n",
     }
 )
+
+
+def _format_location(row: int | None, column: int | None) -> str:
+    parts = []
+    if row is not None:
+        parts.append(f"fila {row}")
+    if column is not None:
+        parts.append(f"columna {column}")
+    return ", ".join(parts)
+
+
+def _handle_invalid_value(
+    value,
+    *,
+    reason: str,
+    strict: bool,
+    exc_type: type[NormalizationValueError],
+    row: int | None = None,
+    column: int | None = None,
+):
+    location = _format_location(row, column)
+    location_msg = f" en {location}" if location else ""
+    if strict:
+        detail = f"{reason}{f' ({location})' if location else ''}"
+        raise exc_type(detail)
+    logging.warning("Descartando valor %r%s: %s", value, location_msg, reason)
 
 
 def _strip_accents(value: str) -> str:
@@ -181,7 +224,14 @@ def _excel_serial_to_date(value: float) -> date:
     return (EXCEL_EPOCH + timedelta(days=float(value))).date()
 
 
-def date_only_ex2(value, order: str) -> Optional[date]:
+def date_only_ex2(
+    value,
+    order: str,
+    *,
+    strict: bool = False,
+    row: int | None = None,
+    column: int | None = None,
+) -> Optional[date]:
     """Parse dates written as MDY/DMY strings or Excel serials.
 
     The behaviour mirrors ``DateOnlyEx2``: on invalid input ``None`` is
@@ -214,9 +264,25 @@ def date_only_ex2(value, order: str) -> Optional[date]:
             parts = text.split(sep)
             break
     else:
+        _handle_invalid_value(
+            value,
+            reason="No se encontraron separadores de fecha",
+            strict=strict,
+            exc_type=InvalidDateValueError,
+            row=row,
+            column=column,
+        )
         return None
 
     if len(parts) != 3:
+        _handle_invalid_value(
+            value,
+            reason="La fecha no tiene 3 componentes",
+            strict=strict,
+            exc_type=InvalidDateValueError,
+            row=row,
+            column=column,
+        )
         return None
 
     try:
@@ -226,8 +292,24 @@ def date_only_ex2(value, order: str) -> Optional[date]:
         elif order == "DMY":
             d, m, y = (int(p) for p in parts)
         else:
+            _handle_invalid_value(
+                value,
+                reason=f"Orden de fecha desconocido: {order}",
+                strict=strict,
+                exc_type=InvalidDateValueError,
+                row=row,
+                column=column,
+            )
             return None
     except ValueError:
+        _handle_invalid_value(
+            value,
+            reason="Componentes numéricos de fecha inválidos",
+            strict=strict,
+            exc_type=InvalidDateValueError,
+            row=row,
+            column=column,
+        )
         return None
 
     if y < 100:
@@ -236,10 +318,24 @@ def date_only_ex2(value, order: str) -> Optional[date]:
     try:
         return date(y, m, d)
     except ValueError:
+        _handle_invalid_value(
+            value,
+            reason="Fecha fuera de rango",
+            strict=strict,
+            exc_type=InvalidDateValueError,
+            row=row,
+            column=column,
+        )
         return None
 
 
-def time_to_sec_ex(value) -> int:
+def time_to_sec_ex(
+    value,
+    *,
+    strict: bool = False,
+    row: int | None = None,
+    column: int | None = None,
+) -> int:
     """Parse times written as ``hh:mm[:ss]`` or ``hhmm`` numbers.
 
     Invalid values return ``0`` as in the VBA version.
@@ -264,16 +360,40 @@ def time_to_sec_ex(value) -> int:
             m = int(parts[1]) if len(parts) >= 2 else 0
             s = int(parts[2]) if len(parts) >= 3 else 0
         except ValueError:
+            _handle_invalid_value(
+                value,
+                reason="Formato de hora inválido",
+                strict=strict,
+                exc_type=InvalidTimeValueError,
+                row=row,
+                column=column,
+            )
             return 0
     else:
         try:
             number = int(text)
         except ValueError:
+            _handle_invalid_value(
+                value,
+                reason="No se pudo interpretar la hora como entero",
+                strict=strict,
+                exc_type=InvalidTimeValueError,
+                row=row,
+                column=column,
+            )
             return 0
         h, m = divmod(number, 100)
         s = 0
 
     if not (0 <= h <= 47 and 0 <= m <= 59 and 0 <= s <= 59):
+        _handle_invalid_value(
+            value,
+            reason="Hora fuera de rango",
+            strict=strict,
+            exc_type=InvalidTimeValueError,
+            row=row,
+            column=column,
+        )
         return 0
 
     return h * 3600 + m * 60 + s
@@ -286,7 +406,13 @@ def _seconds_to_time(seconds: int) -> time:
     return time(hour=h, minute=m, second=s)
 
 
-def normalize_vehiculo_key(value) -> str:
+def normalize_vehiculo_key(
+    value,
+    *,
+    strict: bool = False,
+    row: int | None = None,
+    column: int | None = None,
+) -> str:
     """Return an upper-case alphanumeric vehicle key.
 
     Mirrors ``NormalizeVehiculoKey`` by removing any non-alphanumeric
@@ -295,17 +421,52 @@ def normalize_vehiculo_key(value) -> str:
     """
 
     if value is None:
+        if strict:
+            _handle_invalid_value(
+                value,
+                reason="Valor vacío para vehículo",
+                strict=strict,
+                exc_type=InvalidVehicleKeyError,
+                row=row,
+                column=column,
+            )
         return ""
 
     try:
         text = str(value).strip()
     except Exception:
+        _handle_invalid_value(
+            value,
+            reason="No se pudo convertir a texto",
+            strict=strict,
+            exc_type=InvalidVehicleKeyError,
+            row=row,
+            column=column,
+        )
         return ""
 
-    if text.lower() == "none":
+    if text.lower() == "none" or not text:
+        if strict:
+            _handle_invalid_value(
+                value,
+                reason="Valor vacío para vehículo",
+                strict=strict,
+                exc_type=InvalidVehicleKeyError,
+                row=row,
+                column=column,
+            )
         return ""
 
     filtered = re.sub(r"[^0-9A-Za-z]", "", text)
+    if not filtered and strict:
+        _handle_invalid_value(
+            value,
+            reason="No quedan caracteres alfanuméricos para el vehículo",
+            strict=strict,
+            exc_type=InvalidVehicleKeyError,
+            row=row,
+            column=column,
+        )
     return filtered.upper()
 
 
@@ -390,7 +551,13 @@ def _require_pandas():
     return pd
 
 
-def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str | None = None):
+def read_division_excel(
+    path: str,
+    *,
+    date_order: str = "MDY",
+    sheet_name: str | None = None,
+    strict: bool = False,
+):
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
@@ -408,6 +575,7 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
         raise ValueError("No se pudieron detectar las columnas obligatorias (kilómetros, fecha, hora inicio)")
 
     data = raw.iloc[header_row + 1 :].reset_index(drop=True)
+    row_numbers = [header_row + 2 + idx for idx in range(len(data))]
 
     fecha = pd.to_datetime(
         data.iloc[:, col_fecha],
@@ -415,19 +583,55 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
         dayfirst=date_order.strip().upper() == "DMY",
     ).dt.date
 
+    for idx, parsed_date in enumerate(fecha):
+        if pd.isna(parsed_date):
+            _handle_invalid_value(
+                data.iloc[idx, col_fecha],
+                reason="Fecha inválida en división",
+                strict=strict,
+                exc_type=InvalidDateValueError,
+                row=row_numbers[idx],
+                column=col_fecha + 1,
+            )
+
     valid_rows = fecha.notna()
     data = data.loc[valid_rows].reset_index(drop=True)
     fecha = fecha.loc[valid_rows].reset_index(drop=True)
+    row_numbers = [row for idx, row in enumerate(row_numbers) if valid_rows.iloc[idx]]
 
-    hora_ini_sec = data.iloc[:, col_hora_ini].apply(time_to_sec_ex)
-    hora_fin_sec = (
-        data.iloc[:, col_hora_fin].apply(time_to_sec_ex)
-        if col_hora_fin >= 0
-        else hora_ini_sec
+    hora_ini_sec = pd.Series(
+        [
+            time_to_sec_ex(val, strict=strict, row=row_numbers[idx], column=col_hora_ini + 1)
+            for idx, val in enumerate(data.iloc[:, col_hora_ini].tolist())
+        ]
+    )
+    hora_fin_source = data.iloc[:, col_hora_fin] if col_hora_fin >= 0 else hora_ini_sec
+    hora_fin_sec = pd.Series(
+        [
+            time_to_sec_ex(
+                val,
+                strict=strict,
+                row=row_numbers[idx],
+                column=(col_hora_fin + 1) if col_hora_fin >= 0 else None,
+            )
+            if col_hora_fin >= 0
+            else val
+            for idx, val in enumerate(hora_fin_source.tolist())
+        ]
     )
 
     vehiculo_raw = data.iloc[:, col_veh] if col_veh >= 0 else pd.Series("", index=data.index)
-    vehiculo = vehiculo_raw.apply(normalize_vehiculo_key)
+    vehiculo = pd.Series(
+        [
+            normalize_vehiculo_key(
+                val,
+                strict=strict,
+                row=row_numbers[idx],
+                column=col_veh + 1 if col_veh >= 0 else None,
+            )
+            for idx, val in enumerate(vehiculo_raw.tolist())
+        ]
+    )
 
     cliente_raw = data.iloc[:, col_cliente] if col_cliente >= 0 else pd.Series("", index=data.index)
     cliente = cliente_raw.apply(lambda v: "" if pd.isna(v) else str(v).strip())
@@ -457,7 +661,13 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     )
 
 
-def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY"):
+def read_visitas_excel(
+    path: str,
+    *,
+    sheet_name: str | None = None,
+    date_order: str = "DMY",
+    strict: bool = False,
+):
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
@@ -476,23 +686,37 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
         raise ValueError("Visitas: faltan columnas mínimas (Unidad, Fecha/Hora Llegada)")
 
     records: List[dict] = []
-    for row in raw.iloc[header_row + 1 :].itertuples(index=False, name=None):
+    for idx, row in enumerate(raw.iloc[header_row + 1 :].itertuples(index=False, name=None), start=header_row + 2):
         vehiculo_raw = row[col_unidad]
-        vehiculo = normalize_vehiculo_key(vehiculo_raw)
+        vehiculo = normalize_vehiculo_key(vehiculo_raw, strict=strict, row=idx, column=col_unidad + 1)
         if not vehiculo:
+            logging.warning("Fila %s: se descarta por vehículo vacío", idx)
             continue
 
-        fecha = date_only_ex2(row[col_fecha], date_order)
-        hora_sec = time_to_sec_ex(row[col_hora])
+        fecha = date_only_ex2(row[col_fecha], date_order, strict=strict, row=idx, column=col_fecha + 1)
+        hora_sec = time_to_sec_ex(row[col_hora], strict=strict, row=idx, column=col_hora + 1)
         if not fecha:
+            logging.warning("Fila %s: se descarta por fecha inválida", idx)
             continue
 
         fecha_sal_val = row[col_fecha_sal] if col_fecha_sal >= 0 else None
-        fecha_sal = date_only_ex2(fecha_sal_val, date_order) if fecha_sal_val is not None else None
+        fecha_sal = (
+            date_only_ex2(fecha_sal_val, date_order, strict=strict, row=idx, column=col_fecha_sal + 1)
+            if fecha_sal_val is not None
+            else None
+        )
         hora_sal_val = row[col_hora_sal] if col_hora_sal >= 0 else None
-        hora_sal_sec = time_to_sec_ex(hora_sal_val) if hora_sal_val is not None else 0
+        hora_sal_sec = (
+            time_to_sec_ex(hora_sal_val, strict=strict, row=idx, column=col_hora_sal + 1)
+            if hora_sal_val is not None
+            else 0
+        )
         duracion_val = row[col_duracion] if col_duracion >= 0 else None
-        duracion = time_to_sec_ex(duracion_val) if duracion_val is not None else 0
+        duracion = (
+            time_to_sec_ex(duracion_val, strict=strict, row=idx, column=col_duracion + 1)
+            if duracion_val is not None
+            else 0
+        )
 
         inicio_abs = datetime.combine(fecha, _seconds_to_time(hora_sec))
         if fecha_sal or hora_sal_sec:
@@ -504,6 +728,7 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
             fin_abs = inicio_abs
 
         if (fin_abs - inicio_abs).total_seconds() < 60:
+            logging.warning("Fila %s: duración menor al mínimo, se descarta", idx)
             continue
 
         cat_val = row[col_cat] if col_cat >= 0 else None
@@ -575,4 +800,8 @@ __all__ = [
     "read_visitas_excel",
     "build_timeline",
     "CatCategory",
+    "NormalizationValueError",
+    "InvalidDateValueError",
+    "InvalidTimeValueError",
+    "InvalidVehicleKeyError",
 ]
