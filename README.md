@@ -31,7 +31,29 @@ python -m analysis.cli \
 También pueden usarse variables de entorno `DIVISION_FILE`, `VISITAS_FILE`,
 `OUTPUT_CSV` y `OUTPUT_XLSX` para evitar argumentos explícitos.
 
-## Dependencias
+## Instalación y dependencias
 
-Se requieren `pandas` y `openpyxl` para leer archivos Excel. Instala los
-paquetes con `pip install pandas openpyxl`.
+Este proyecto está probado con Python 3.10+ y requiere `pandas>=1.5` y
+`openpyxl>=3.1` para leer archivos Excel.
+
+1. (Opcional) Crea un entorno virtual:
+
+   ```
+   python -m venv .venv
+   source .venv/bin/activate
+   ```
+
+2. Instala las dependencias mínimas:
+
+   ```
+   pip install -r requirements.txt
+   ```
+
+3. Para ejecutar las pruebas y herramientas de formateo:
+
+   ```
+   pip install -r requirements-dev.txt
+   ```
+
+Las dependencias de desarrollo incluyen `pytest` para las pruebas y `black`/`ruff`
+para el formateo y linting.
