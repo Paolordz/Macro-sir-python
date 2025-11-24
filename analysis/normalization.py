@@ -395,6 +395,8 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
     header_row = find_header_row(raw)
 
+    division_name = extraer_division_desde_nombre(path)
+
     col_km = find_col_any_in_row(raw, header_row, ["Kilómetros", "KMS", "Kilometros"])
     col_fecha = find_col_any_in_row(raw, header_row, ["Fecha Inicio", "F Servicio", "Fecha", "F_Servicio"])
     col_hora_ini = find_col_any_in_row(raw, header_row, ["Hora Inicio", "HoraInicial", "Inicio", "HI"])
@@ -427,7 +429,7 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
 
         records.append(
             {
-                "division": extraer_division_desde_nombre(path),
+                "division": division_name,
                 "vehiculo": vehiculo,
                 "inicio": start_dt,
                 "fin": end_dt,
