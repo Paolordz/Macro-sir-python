@@ -391,7 +391,8 @@ def _require_pandas():
 
 def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str | None = None):
     pd = _require_pandas()
-    raw = pd.read_excel(path, sheet_name=sheet_name, header=None)
+    parsed_sheet = 0 if sheet_name is None else sheet_name
+    raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
     header_row = find_header_row(raw)
 
     col_km = find_col_any_in_row(raw, header_row, ["Kilómetros", "KMS", "Kilometros"])
@@ -439,7 +440,8 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
 
 def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY"):
     pd = _require_pandas()
-    raw = pd.read_excel(path, sheet_name=sheet_name, header=None)
+    parsed_sheet = 0 if sheet_name is None else sheet_name
+    raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
     header_row = find_header_row_visitas(raw)
 
     col_unidad = find_col_any_in_row(raw, header_row, ["Unidad", "Económico", "Economico", "No Economico", "NoEconomico"])

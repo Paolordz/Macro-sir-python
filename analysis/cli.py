@@ -42,11 +42,18 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--visitas-date-order", dest="visitas_date_order", default="DMY")
     parser.add_argument("--division-sheet", dest="division_sheet", default=None)
     parser.add_argument("--visitas-sheet", dest="visitas_sheet", default=None)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    if not args.output_csv and not args.output_excel:
+        parser.error("Debe especificar al menos --output-csv o --output-excel")
+
+    return args
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
+    if not args.output_csv and not args.output_excel:
+        raise SystemExit("--output-csv o --output-excel es obligatorio")
     if not args.division_file:
         raise SystemExit("--division-file o la variable de entorno DIVISION_FILE es obligatoria")
     if not args.visitas_file:
