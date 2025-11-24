@@ -23,11 +23,32 @@ def test_date_only_ex2_handles_mdy_and_dmy():
     assert date_only_ex2("", "DMY") is None
 
 
+@pytest.mark.parametrize(
+    "value, order",
+    [
+        ("31/13/2024", "DMY"),
+        ("2024-31-12", "MDY"),
+        ("no-date", "DMY"),
+        (0, "DMY"),
+        (-5, "MDY"),
+        (0.5, "MDY"),
+        ("31/12/2024", "YMD"),
+    ],
+)
+def test_date_only_ex2_rejects_invalid_inputs(value, order):
+    assert date_only_ex2(value, order) is None
+
+
 def test_time_to_sec_ex_accepts_fraction_and_text():
     assert time_to_sec_ex(0.5) == 43200
     assert time_to_sec_ex("12:30") == 12 * 3600 + 30 * 60
     assert time_to_sec_ex("0730") == 7 * 3600 + 30 * 60
     assert time_to_sec_ex("99:99") == 0
+
+
+@pytest.mark.parametrize("value", ["48:00", "1260", "ab:cd", "-0100", None, ""])  # type: ignore[arg-type]
+def test_time_to_sec_ex_rejects_out_of_range_and_bad_formats(value):
+    assert time_to_sec_ex(value) == 0
 
 
 def test_normalize_vehiculo_key_filters_chars():
