@@ -23,6 +23,37 @@ def _env_or_default(name: str, default: Optional[str]) -> Optional[str]:
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """Parsea los argumentos CLI emulando los cuadros de diálogo del VBA.
+
+    Parameters
+    ----------
+    argv:
+        Lista de argumentos a parsear (sin el nombre del script). Si es
+        ``None`` se leen directamente de ``sys.argv``.
+
+    Returns
+    -------
+    argparse.Namespace
+        Espacio de nombres con rutas a los archivos de División y Visitas,
+        rutas de salida y ajustes de fecha/hoja.
+
+    Raises
+    ------
+    SystemExit
+        Si el usuario no especifica al menos una salida (CSV o Excel). La
+        salida coincide con el comportamiento del parser de VBA cuando
+        faltaban selecciones en los diálogos.
+
+    Examples
+    --------
+    >>> parse_args([
+    ...     "--division-file", "division.xlsx",
+    ...     "--visitas-file", "visitas.xlsx",
+    ...     "--output-csv", "timeline.csv",
+    ... ])
+    Namespace(division_file='division.xlsx', visitas_file='visitas.xlsx', ...)
+    """
+
     parser = argparse.ArgumentParser(description="Generar tabla de línea de tiempo/Gantt desde reportes Excel")
     parser.add_argument(
         "--division-file",
@@ -51,6 +82,42 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    """Ejecuta la conversión de Excel a timeline CSV/XLSX.
+
+    Parameters
+    ----------
+    argv:
+        Lista de argumentos de línea de comandos. Se pasa directamente a
+        :func:`parse_args` para permitir testeo y composición.
+
+    Returns
+    -------
+    int
+        Código de salida estilo shell (``0`` en éxito).
+
+    Raises
+    ------
+    SystemExit
+        Cuando faltan archivos obligatorios o salidas, replicando la
+        validación estricta del macro VBA.
+
+    Notes
+    -----
+    Esta función conserva la compatibilidad con el flujo VBA original: se
+    leen las hojas completas sin encabezados, se detectan columnas
+    tolerando variaciones y se exporta sin modificar orden ni formatos de
+    fechas más allá de la normalización necesaria para el timeline.
+
+    Examples
+    --------
+    >>> main([
+    ...     "--division-file", "division.xlsx",
+    ...     "--visitas-file", "visitas.xlsx",
+    ...     "--output-csv", "timeline.csv",
+    ... ])
+    0
+    """
+
     args = parse_args(argv)
     if not args.output_csv and not args.output_excel:
         raise SystemExit("--output-csv o --output-excel es obligatorio")
