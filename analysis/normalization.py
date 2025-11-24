@@ -380,6 +380,32 @@ def extraer_division_desde_nombre(file_name: str) -> str:
 
 # === DataFrame helpers ===
 
+def _normalized_headers_at(data: "pandas.DataFrame", row_idx: int):
+    if row_idx < 0 or row_idx >= len(data):
+        return []
+    row = data.iloc[row_idx].fillna("")
+    return [(idx, str(value), normalize(value)) for idx, value in enumerate(row.tolist())]
+
+
+def _format_detected_columns(detected: dict[str, int]) -> str:
+    ordered = ", ".join(
+        f"{name}={pos}" if pos >= 0 else f"{name}=no encontrado" for name, pos in detected.items()
+    )
+    return ordered if ordered else ""
+
+
+def _format_normalized_headers(headers: list[tuple[int, str, str]]) -> str:
+    if not headers:
+        return "<sin encabezados>"
+    return ", ".join(f"{idx}:{normalized or '<vacio>'}" for idx, _raw, normalized in headers)
+
+
+def _log_verbose(context: str, header_row: int, headers: list[tuple[int, str, str]], detected: dict[str, int]):
+    print(f"[{context}] Fila de encabezados: {header_row + 1}")
+    print(f"[{context}] Encabezados normalizados: {_format_normalized_headers(headers)}")
+    print(f"[{context}] Columnas detectadas: {_format_detected_columns(detected)}")
+
+
 def _require_pandas():
     try:
         import pandas as pd  # type: ignore
@@ -390,7 +416,7 @@ def _require_pandas():
     return pd
 
 
-def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str | None = None):
+def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str | None = None, verbose: bool = False):
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
@@ -403,9 +429,29 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     col_veh = find_col_any_in_row(raw, header_row, ["Vehiculo", "Vehículo", "Unidad", "Carro", "KCarro"])
     col_cliente = find_col_any_in_row(raw, header_row, ["Cliente / SiteVisit", "Cliente", "Cliente SiteVisit"])
 
+    detected_cols = {
+        "km": col_km,
+        "fecha": col_fecha,
+        "hora_inicio": col_hora_ini,
+        "hora_fin": col_hora_fin,
+        "vehiculo": col_veh,
+        "cliente": col_cliente,
+    }
+    headers = _normalized_headers_at(raw, header_row)
+
+    if verbose:
+        _log_verbose("DIVISION", header_row, headers, detected_cols)
+
     required = [col_km, col_fecha, col_hora_ini]
     if any(idx < 0 for idx in required):
-        raise ValueError("No se pudieron detectar las columnas obligatorias (kilómetros, fecha, hora inicio)")
+        msg = (
+            "No se pudieron detectar las columnas obligatorias (kilómetros, fecha, hora inicio). "
+            f"Columnas detectadas: {_format_detected_columns(detected_cols)}. "
+            f"Encabezados normalizados en fila {header_row + 1}: {_format_normalized_headers(headers)}. "
+            "Revise que la fila de títulos sea correcta, que los nombres incluyan las palabras clave esperadas "
+            "y que haya seleccionado la hoja adecuada."
+        )
+        raise ValueError(msg)
 
     data = raw.iloc[header_row + 1 :].reset_index(drop=True)
 
@@ -457,7 +503,7 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     )
 
 
-def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY"):
+def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY", verbose: bool = False):
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
@@ -472,8 +518,30 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
     col_cat = find_col_any_in_row(raw, header_row, ["Categoría", "Categoria", "Categoría Visita", "Tipo", "Tipo Visita"])
     col_sitio = find_col_any_in_row(raw, header_row, ["Sitio", "Lugar", "Ubicacion", "Ubicación", "Punto", "Destino"])
 
+    detected_cols = {
+        "unidad": col_unidad,
+        "fecha_llegada": col_fecha,
+        "hora_llegada": col_hora,
+        "fecha_salida": col_fecha_sal,
+        "hora_salida": col_hora_sal,
+        "duracion": col_duracion,
+        "categoria": col_cat,
+        "sitio": col_sitio,
+    }
+    headers = _normalized_headers_at(raw, header_row)
+
+    if verbose:
+        _log_verbose("VISITAS", header_row, headers, detected_cols)
+
     if col_unidad < 0 or col_fecha < 0 or col_hora < 0:
-        raise ValueError("Visitas: faltan columnas mínimas (Unidad, Fecha/Hora Llegada)")
+        msg = (
+            "Visitas: faltan columnas mínimas (Unidad, Fecha/Hora Llegada). "
+            f"Columnas detectadas: {_format_detected_columns(detected_cols)}. "
+            f"Encabezados normalizados en fila {header_row + 1}: {_format_normalized_headers(headers)}. "
+            "Verifique que la fila de encabezados sea la correcta, que los títulos incluyan las etiquetas esperadas "
+            "y que la hoja seleccionada sea la adecuada."
+        )
+        raise ValueError(msg)
 
     records: List[dict] = []
     for row in raw.iloc[header_row + 1 :].itertuples(index=False, name=None):

@@ -42,6 +42,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--visitas-date-order", dest="visitas_date_order", default="DMY")
     parser.add_argument("--division-sheet", dest="division_sheet", default=None)
     parser.add_argument("--visitas-sheet", dest="visitas_sheet", default=None)
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Muestra columnas detectadas y encabezados normalizados durante la validación",
+    )
     args = parser.parse_args(argv)
 
     if not args.output_csv and not args.output_excel:
@@ -59,8 +64,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not args.visitas_file:
         raise SystemExit("--visitas-file o la variable de entorno VISITAS_FILE es obligatoria")
 
-    div_df = read_division_excel(args.division_file, date_order=args.division_date_order, sheet_name=args.division_sheet)
-    visitas_df = read_visitas_excel(args.visitas_file, date_order=args.visitas_date_order, sheet_name=args.visitas_sheet)
+    div_df = read_division_excel(
+        args.division_file,
+        date_order=args.division_date_order,
+        sheet_name=args.division_sheet,
+        verbose=args.verbose,
+    )
+    visitas_df = read_visitas_excel(
+        args.visitas_file,
+        date_order=args.visitas_date_order,
+        sheet_name=args.visitas_sheet,
+        verbose=args.verbose,
+    )
     timeline_df = build_timeline(div_df, visitas_df)
 
     if args.output_csv:
