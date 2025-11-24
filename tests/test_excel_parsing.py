@@ -10,6 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from analysis.cli import main
 from analysis.normalization import (
+    _build_division_records,
+    _detect_division_header_row,
+    _map_division_columns,
+    _process_division_dataframe,
+    _validate_division_rows,
     build_timeline,
     find_header_row_cargas,
     find_header_row_visitas,
@@ -52,6 +57,50 @@ def test_visitas_header_detection(sample_visitas_file: Path):
     assert header == 0
 
 
+def test_division_column_mapping(sample_division_file: Path):
+    raw = pd.read_excel(sample_division_file, header=None)
+    header = _detect_division_header_row(raw)
+    columns = _map_division_columns(raw, header)
+
+    assert columns == {
+        "km": 1,
+        "fecha": 2,
+        "hora_ini": 3,
+        "hora_fin": 4,
+        "vehiculo": 0,
+        "cliente": 5,
+    }
+
+
+def test_division_validation_filters_invalid_rows():
+    raw = pd.DataFrame(
+        [
+            ["Vehículo", "Kilómetros", "Fecha Inicio", "Hora Inicio", "Hora Fin", "Cliente"],
+            ["AA-01", 10, "15/01/2024", "07:30", "08:00", "Cliente A"],
+            ["", 5, "", "07:00", "07:30", "Cliente B"],
+        ]
+    )
+    header = _detect_division_header_row(raw)
+    columns = _map_division_columns(raw, header)
+    validated = _validate_division_rows(raw, header, columns, date_order="DMY")
+
+    assert len(validated) == 1
+    assert validated.loc[0, "vehiculo"] == "AA01"
+    assert validated.loc[0, "hora_fin_sec"] > validated.loc[0, "hora_ini_sec"]
+
+
+def test_division_record_builder_preserves_metadata(sample_division_file: Path):
+    raw = pd.read_excel(sample_division_file, header=None)
+    header = _detect_division_header_row(raw)
+    columns = _map_division_columns(raw, header)
+    validated = _validate_division_rows(raw, header, columns, date_order="MDY")
+
+    records = _build_division_records(validated, path=str(sample_division_file))
+    assert list(records.columns)[:4] == ["division", "vehiculo", "inicio", "fin"]
+    assert records["division"].iloc[0] == "Division Norte"
+    assert records["servicio_id"].iloc[0].endswith("-000")
+
+
 def test_cargas_header_detection():
     df = pd.DataFrame(
         [
@@ -73,6 +122,16 @@ def test_read_division_and_visitas(sample_division_file: Path, sample_visitas_fi
     timeline = build_timeline(div_df, visitas_df)
     assert len(timeline) == len(div_df) + len(visitas_df)
     assert list(timeline.sort_values("inicio").vehiculo.unique()) == ["AA01", "BB02"]
+
+
+def test_division_orchestration_matches_public_api(sample_division_file: Path):
+    raw = pd.read_excel(sample_division_file, header=None)
+    orchestrated = _process_division_dataframe(raw, path=str(sample_division_file), date_order="MDY")
+    public_api = read_division_excel(sample_division_file, date_order="MDY")
+
+    pd.testing.assert_frame_equal(
+        orchestrated.reset_index(drop=True), public_api.reset_index(drop=True)
+    )
 
 
 def test_cli_requires_output(sample_division_file: Path, sample_visitas_file: Path, capsys):

@@ -378,6 +378,161 @@ def extraer_division_desde_nombre(file_name: str) -> str:
     return f"Division {formatted}" if not formatted.lower().startswith("division") else formatted
 
 
+# === División import helpers ===
+
+def _detect_division_header_row(raw: "pandas.DataFrame") -> int:
+    """Detect the header row for división reports.
+
+    The helper simply delegates to :func:`find_header_row` but is kept
+    separate so it can be unit tested without exercising the rest of the
+    pipeline.
+    """
+
+    return find_header_row(raw)
+
+
+def _map_division_columns(raw: "pandas.DataFrame", header_row: int) -> dict[str, int]:
+    """Return column indexes for required and optional división fields.
+
+    Raises:
+        ValueError: when any of the required columns cannot be located.
+    """
+
+    col_km = find_col_any_in_row(raw, header_row, ["Kilómetros", "KMS", "Kilometros"])
+    col_fecha = find_col_any_in_row(raw, header_row, ["Fecha Inicio", "F Servicio", "Fecha", "F_Servicio"])
+    col_hora_ini = find_col_any_in_row(raw, header_row, ["Hora Inicio", "HoraInicial", "Inicio", "HI"])
+    col_hora_fin = find_col_any_in_row(raw, header_row, ["Hora Fin", "HoraFinal", "Fin", "HF"])
+    col_veh = find_col_any_in_row(raw, header_row, ["Vehiculo", "Vehículo", "Unidad", "Carro", "KCarro"])
+    col_cliente = find_col_any_in_row(raw, header_row, ["Cliente / SiteVisit", "Cliente", "Cliente SiteVisit"])
+
+    required = {
+        "km": col_km,
+        "fecha": col_fecha,
+        "hora_ini": col_hora_ini,
+    }
+    missing_required = [name for name, idx in required.items() if idx < 0]
+    if missing_required:
+        raise ValueError("No se pudieron detectar las columnas obligatorias (kilómetros, fecha, hora inicio)")
+
+    return {
+        **required,
+        "hora_fin": col_hora_fin,
+        "vehiculo": col_veh,
+        "cliente": col_cliente,
+    }
+
+
+def _validate_division_rows(
+    raw: "pandas.DataFrame",
+    header_row: int,
+    column_map: dict[str, int],
+    *,
+    date_order: str,
+) -> "pandas.DataFrame":
+    """Filter and normalize división rows.
+
+    Returns a DataFrame with normalized values ready for record
+    construction. Invalid rows (missing fecha or vehículo) are removed to
+    mirror the permissive VBA behaviour.
+    """
+
+    pd = _require_pandas()
+
+    data = raw.iloc[header_row + 1 :].reset_index(drop=True)
+
+    fecha = pd.to_datetime(
+        data.iloc[:, column_map["fecha"]],
+        errors="coerce",
+        dayfirst=date_order.strip().upper() == "DMY",
+    ).dt.date
+
+    valid_rows = fecha.notna()
+    data = data.loc[valid_rows].reset_index(drop=True)
+    fecha = fecha.loc[valid_rows].reset_index(drop=True)
+
+    hora_ini_sec = data.iloc[:, column_map["hora_ini"]].apply(time_to_sec_ex)
+    hora_fin_sec = (
+        data.iloc[:, column_map["hora_fin"]].apply(time_to_sec_ex)
+        if column_map.get("hora_fin", -1) >= 0
+        else hora_ini_sec
+    )
+
+    vehiculo_raw = (
+        data.iloc[:, column_map["vehiculo"]] if column_map.get("vehiculo", -1) >= 0 else pd.Series("", index=data.index)
+    )
+    vehiculo = vehiculo_raw.apply(normalize_vehiculo_key)
+
+    cliente_raw = (
+        data.iloc[:, column_map["cliente"]] if column_map.get("cliente", -1) >= 0 else pd.Series("", index=data.index)
+    )
+    cliente = cliente_raw.apply(lambda v: "" if pd.isna(v) else str(v).strip())
+
+    km = pd.to_numeric(data.iloc[:, column_map["km"]], errors="coerce").fillna(0.0)
+
+    valid_mask = vehiculo.astype(bool)
+    return pd.DataFrame(
+        {
+            "vehiculo": vehiculo.loc[valid_mask].reset_index(drop=True),
+            "fecha": fecha.loc[valid_mask].reset_index(drop=True),
+            "hora_ini_sec": hora_ini_sec.loc[valid_mask].reset_index(drop=True),
+            "hora_fin_sec": hora_fin_sec.loc[valid_mask].reset_index(drop=True),
+            "cliente_site": cliente.loc[valid_mask].reset_index(drop=True),
+            "km": km.loc[valid_mask].reset_index(drop=True),
+        }
+    )
+
+
+def _build_division_records(rows: "pandas.DataFrame", path: str) -> "pandas.DataFrame":
+    """Convert validated división rows into normalized records."""
+
+    pd = _require_pandas()
+
+    fecha = rows["fecha"]
+    inicio = pd.to_datetime(fecha) + pd.to_timedelta(rows["hora_ini_sec"], unit="s")
+    fin = pd.to_datetime(fecha) + pd.to_timedelta(rows["hora_fin_sec"], unit="s")
+    minutos = (fin - inicio).dt.total_seconds().div(60).clip(lower=0.0)
+
+    division = extraer_division_desde_nombre(path)
+    servicio_ids = [
+        servicio_id_from_components(veh, fec, idx)
+        for idx, (veh, fec) in enumerate(zip(rows["vehiculo"].tolist(), fecha.tolist()))
+    ]
+
+    records = rows.assign(
+        division=division,
+        inicio=inicio,
+        fin=fin,
+        minutos=minutos,
+        servicio_id=servicio_ids,
+        tipo="SERVICIO",
+    )
+
+    return records[
+        [
+            "division",
+            "vehiculo",
+            "inicio",
+            "fin",
+            "km",
+            "minutos",
+            "cliente_site",
+            "servicio_id",
+            "tipo",
+        ]
+    ]
+
+
+def _process_division_dataframe(
+    raw: "pandas.DataFrame", *, path: str, date_order: str = "MDY"
+) -> "pandas.DataFrame":
+    """Orchestrate the división import pipeline for unit testing."""
+
+    header_row = _detect_division_header_row(raw)
+    column_map = _map_division_columns(raw, header_row)
+    valid_rows = _validate_division_rows(raw, header_row, column_map, date_order=date_order)
+    return _build_division_records(valid_rows, path)
+
+
 # === DataFrame helpers ===
 
 def _require_pandas():
@@ -442,67 +597,7 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
-    header_row = find_header_row(raw)
-
-    col_km = find_col_any_in_row(raw, header_row, ["Kilómetros", "KMS", "Kilometros"])
-    col_fecha = find_col_any_in_row(raw, header_row, ["Fecha Inicio", "F Servicio", "Fecha", "F_Servicio"])
-    col_hora_ini = find_col_any_in_row(raw, header_row, ["Hora Inicio", "HoraInicial", "Inicio", "HI"])
-    col_hora_fin = find_col_any_in_row(raw, header_row, ["Hora Fin", "HoraFinal", "Fin", "HF"])
-    col_veh = find_col_any_in_row(raw, header_row, ["Vehiculo", "Vehículo", "Unidad", "Carro", "KCarro"])
-    col_cliente = find_col_any_in_row(raw, header_row, ["Cliente / SiteVisit", "Cliente", "Cliente SiteVisit"])
-
-    required = [col_km, col_fecha, col_hora_ini]
-    if any(idx < 0 for idx in required):
-        raise ValueError("No se pudieron detectar las columnas obligatorias (kilómetros, fecha, hora inicio)")
-
-    data = raw.iloc[header_row + 1 :].reset_index(drop=True)
-
-    fecha = pd.to_datetime(
-        data.iloc[:, col_fecha],
-        errors="coerce",
-        dayfirst=date_order.strip().upper() == "DMY",
-    ).dt.date
-
-    valid_rows = fecha.notna()
-    data = data.loc[valid_rows].reset_index(drop=True)
-    fecha = fecha.loc[valid_rows].reset_index(drop=True)
-
-    hora_ini_sec = data.iloc[:, col_hora_ini].apply(time_to_sec_ex)
-    hora_fin_sec = (
-        data.iloc[:, col_hora_fin].apply(time_to_sec_ex)
-        if col_hora_fin >= 0
-        else hora_ini_sec
-    )
-
-    vehiculo_raw = data.iloc[:, col_veh] if col_veh >= 0 else pd.Series("", index=data.index)
-    vehiculo = vehiculo_raw.apply(normalize_vehiculo_key)
-
-    cliente_raw = data.iloc[:, col_cliente] if col_cliente >= 0 else pd.Series("", index=data.index)
-    cliente = cliente_raw.apply(lambda v: "" if pd.isna(v) else str(v).strip())
-
-    km = pd.to_numeric(data.iloc[:, col_km], errors="coerce").fillna(0.0)
-
-    inicio = pd.to_datetime(fecha) + pd.to_timedelta(hora_ini_sec, unit="s")
-    fin = pd.to_datetime(fecha) + pd.to_timedelta(hora_fin_sec, unit="s")
-    minutos = (fin - inicio).dt.total_seconds().div(60).clip(lower=0.0)
-
-    division = extraer_division_desde_nombre(path)
-    servicio_ids = [
-        servicio_id_from_components(veh, fec, idx)
-        for idx, (veh, fec) in enumerate(zip(vehiculo.tolist(), fecha.tolist()))
-    ]
-
-    return pd.DataFrame().assign(
-        division=division,
-        vehiculo=vehiculo,
-        inicio=inicio,
-        fin=fin,
-        km=km,
-        minutos=minutos,
-        cliente_site=cliente,
-        servicio_id=servicio_ids,
-        tipo="SERVICIO",
-    )
+    return _process_division_dataframe(raw, path=path, date_order=date_order)
 
 
 def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY"):
