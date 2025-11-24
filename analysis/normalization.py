@@ -513,9 +513,12 @@ def build_timeline(divisiones, visitas):
         visitas_norm["minutos"] = (visitas_norm["fin"] - visitas_norm["inicio"]).dt.total_seconds() / 60.0
         visitas_norm["cliente_site"] = visitas_norm.get("sitio", "")
         visitas_norm["division"] = visitas_norm.get("division", "")
-        visitas_norm["servicio_id"] = visitas_norm.apply(
-            lambda row: servicio_id_from_components(row["vehiculo"], row["inicio"].date(), 0), axis=1
-        )
+        vehiculos = visitas_norm["vehiculo"]
+        fechas = visitas_norm["inicio"].dt.date
+        visitas_norm["servicio_id"] = [
+            servicio_id_from_components(vehiculo, fecha, 0)
+            for vehiculo, fecha in zip(vehiculos, fechas)
+        ]
         eventos.append(visitas_norm)
 
     if not eventos:
