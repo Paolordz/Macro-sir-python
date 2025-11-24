@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "macro-sir-python"
+dynamic = ["version"]
+description = "Conversión de macros VBA a utilidades CLI en Python"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Macro SIR Maintainers" }]
+dependencies = [
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+]
+
+[project.scripts]
+macro-sir = "analysis.cli:main"
+
+[tool.setuptools_scm]
+tag_regex = "^(?P<prefix>v)?(?P<version>\\d+\\.\\d+\\.\\d+)$"
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
+fallback_version = "0.0.0"
