@@ -18,13 +18,13 @@ accept the same loose input formats that were tolerated by the macros:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
-from itertools import repeat
 import os
 import re
 import unicodedata
-from typing import Iterable, List, Optional, Sequence
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
+from itertools import repeat
+from typing import Iterable, List, Literal, Sequence, TypeAlias, overload
 
 
 ACCENT_REPLACEMENTS = str.maketrans(
@@ -75,12 +75,15 @@ ACCENT_REPLACEMENTS = str.maketrans(
 )
 
 
+DateOrder: TypeAlias = Literal["MDY", "DMY"]
+
+
 def _strip_accents(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value.translate(ACCENT_REPLACEMENTS))
     return "".join(ch for ch in normalized if not unicodedata.combining(ch))
 
 
-def normalize(value: str) -> str:
+def normalize(value: str | int | float | date | datetime | None) -> str:
     """Replicate the VBA ``Normalize`` helper.
 
     The function removes accents, whitespace, and punctuation so that
@@ -157,7 +160,7 @@ class CatCategory:
     nombre: str
 
     @classmethod
-    def from_raw(cls, raw: str) -> "CatCategory":
+    def from_raw(cls, raw: str | int | float | date | datetime) -> "CatCategory":
         normalized = normalize(raw)
         if "patio" in normalized:
             return cls("Patio")
@@ -167,7 +170,7 @@ class CatCategory:
             return cls("Taller")
         return cls("Otros")
 
-    def guess_from_site(self, site: str) -> "CatCategory":
+    def guess_from_site(self, site: str | int | float | date | datetime) -> "CatCategory":
         guessed = CatCategory.from_raw(site)
         if self.nombre == "Otros" and guessed.nombre != "Otros":
             return guessed
@@ -181,7 +184,27 @@ def _excel_serial_to_date(value: float) -> date:
     return (EXCEL_EPOCH + timedelta(days=float(value))).date()
 
 
-def date_only_ex2(value, order: str) -> Optional[date]:
+@overload
+def date_only_ex2(value: date, order: DateOrder) -> date:
+    ...
+
+
+@overload
+def date_only_ex2(value: datetime, order: DateOrder) -> date:
+    ...
+
+
+@overload
+def date_only_ex2(value: None, order: DateOrder) -> None:
+    ...
+
+
+@overload
+def date_only_ex2(value: str | int | float, order: DateOrder) -> date | None:
+    ...
+
+
+def date_only_ex2(value: str | int | float | date | datetime | None, order: DateOrder) -> date | None:
     """Parse dates written as MDY/DMY strings or Excel serials.
 
     The behaviour mirrors ``DateOnlyEx2``: on invalid input ``None`` is
@@ -239,7 +262,7 @@ def date_only_ex2(value, order: str) -> Optional[date]:
         return None
 
 
-def time_to_sec_ex(value) -> int:
+def time_to_sec_ex(value: str | int | float | date | datetime | None) -> int:
     """Parse times written as ``hh:mm[:ss]`` or ``hhmm`` numbers.
 
     Invalid values return ``0`` as in the VBA version.
@@ -286,7 +309,7 @@ def _seconds_to_time(seconds: int) -> time:
     return time(hour=h, minute=m, second=s)
 
 
-def normalize_vehiculo_key(value) -> str:
+def normalize_vehiculo_key(value: str | int | float | date | datetime | None) -> str:
     """Return an upper-case alphanumeric vehicle key.
 
     Mirrors ``NormalizeVehiculoKey`` by removing any non-alphanumeric
@@ -309,7 +332,11 @@ def normalize_vehiculo_key(value) -> str:
     return filtered.upper()
 
 
-def servicio_id_from_components(vehiculo: str, fecha, secuencial: int) -> str:
+def servicio_id_from_components(
+    vehiculo: str | int | float | date | datetime | None,
+    fecha: str | int | float | date | datetime | None,
+    secuencial: str | int | float | None,
+) -> str:
     veh_key = normalize_vehiculo_key(vehiculo) or "NA"
     if isinstance(fecha, (datetime, date)):
         fecha_key = fecha.strftime("%Y%m%d")
@@ -390,7 +417,7 @@ def _require_pandas():
     return pd
 
 
-def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str | None = None):
+def read_division_excel(path: str, *, date_order: DateOrder = "MDY", sheet_name: str | None = None):
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
@@ -457,7 +484,7 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     )
 
 
-def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY"):
+def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: DateOrder = "DMY"):
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
