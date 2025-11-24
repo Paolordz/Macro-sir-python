@@ -1,10 +1,14 @@
 import datetime as dt
 from pathlib import Path
+import sys
 
 import pytest
 
 pd = pytest.importorskip("pandas")
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from analysis.cli import main
 from analysis.normalization import (
     build_timeline,
     find_header_row_cargas,
@@ -69,3 +73,19 @@ def test_read_division_and_visitas(sample_division_file: Path, sample_visitas_fi
     timeline = build_timeline(div_df, visitas_df)
     assert len(timeline) == len(div_df) + len(visitas_df)
     assert list(timeline.sort_values("inicio").vehiculo.unique()) == ["AA01", "BB02"]
+
+
+def test_cli_requires_output(sample_division_file: Path, sample_visitas_file: Path, capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "--division-file",
+                str(sample_division_file),
+                "--visitas-file",
+                str(sample_visitas_file),
+            ]
+        )
+
+    assert excinfo.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "--output-csv o --output-excel" in stderr
