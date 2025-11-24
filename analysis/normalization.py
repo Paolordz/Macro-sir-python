@@ -407,15 +407,19 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
         raise ValueError("No se pudieron detectar las columnas obligatorias (kilómetros, fecha, hora inicio)")
 
     records: List[dict] = []
-    for _, row in raw.iloc[header_row + 1 :].iterrows():
+    for row in raw.iloc[header_row + 1 :].itertuples(index=False, name=None):
         fecha = date_only_ex2(row[col_fecha], date_order)
         if not fecha:
             continue
-        hora_ini_sec = time_to_sec_ex(row[col_hora_ini])
+        hora_ini_val = row[col_hora_ini]
+        hora_ini_sec = time_to_sec_ex(hora_ini_val)
         hora_fin_sec = time_to_sec_ex(row[col_hora_fin]) if col_hora_fin >= 0 else hora_ini_sec
-        vehiculo = normalize_vehiculo_key(row[col_veh]) if col_veh >= 0 else ""
-        cliente = str(row[col_cliente]).strip() if col_cliente >= 0 and not pd.isna(row[col_cliente]) else ""
-        km = float(row[col_km]) if pd.notna(row[col_km]) else 0.0
+        vehiculo_raw = row[col_veh] if col_veh >= 0 else ""
+        vehiculo = normalize_vehiculo_key(vehiculo_raw) if vehiculo_raw != "" else ""
+        cliente_val = row[col_cliente] if col_cliente >= 0 else None
+        cliente = str(cliente_val).strip() if cliente_val is not None and not pd.isna(cliente_val) else ""
+        km_val = row[col_km]
+        km = float(km_val) if pd.notna(km_val) else 0.0
 
         start_dt = datetime.combine(fecha, _seconds_to_time(hora_ini_sec))
         end_dt = datetime.combine(fecha, _seconds_to_time(hora_fin_sec))
@@ -457,7 +461,7 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
         raise ValueError("Visitas: faltan columnas mínimas (Unidad, Fecha/Hora Llegada)")
 
     records: List[dict] = []
-    for _, row in raw.iloc[header_row + 1 :].iterrows():
+    for row in raw.iloc[header_row + 1 :].itertuples(index=False, name=None):
         vehiculo_raw = row[col_unidad]
         vehiculo = normalize_vehiculo_key(vehiculo_raw)
         if not vehiculo:
@@ -468,9 +472,12 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
         if not fecha:
             continue
 
-        fecha_sal = date_only_ex2(row[col_fecha_sal], date_order) if col_fecha_sal >= 0 else None
-        hora_sal_sec = time_to_sec_ex(row[col_hora_sal]) if col_hora_sal >= 0 else 0
-        duracion = time_to_sec_ex(row[col_duracion]) if col_duracion >= 0 else 0
+        fecha_sal_val = row[col_fecha_sal] if col_fecha_sal >= 0 else None
+        fecha_sal = date_only_ex2(fecha_sal_val, date_order) if fecha_sal_val is not None else None
+        hora_sal_val = row[col_hora_sal] if col_hora_sal >= 0 else None
+        hora_sal_sec = time_to_sec_ex(hora_sal_val) if hora_sal_val is not None else 0
+        duracion_val = row[col_duracion] if col_duracion >= 0 else None
+        duracion = time_to_sec_ex(duracion_val) if duracion_val is not None else 0
 
         inicio_abs = datetime.combine(fecha, _seconds_to_time(hora_sec))
         if fecha_sal or hora_sal_sec:
@@ -484,8 +491,10 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
         if (fin_abs - inicio_abs).total_seconds() < 60:
             continue
 
-        cat_raw = str(row[col_cat]).strip() if col_cat >= 0 and not pd.isna(row[col_cat]) else ""
-        sitio_raw = str(row[col_sitio]).strip() if col_sitio >= 0 and not pd.isna(row[col_sitio]) else ""
+        cat_val = row[col_cat] if col_cat >= 0 else None
+        cat_raw = str(cat_val).strip() if cat_val is not None and not pd.isna(cat_val) else ""
+        sitio_val = row[col_sitio] if col_sitio >= 0 else None
+        sitio_raw = str(sitio_val).strip() if sitio_val is not None and not pd.isna(sitio_val) else ""
         categoria = CatCategory.from_raw(cat_raw).guess_from_site(sitio_raw).nombre
 
         records.append(
