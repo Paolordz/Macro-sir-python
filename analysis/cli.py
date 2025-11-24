@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from .normalization import build_timeline, read_division_excel, read_visitas_excel
+from .settings import Settings
 
 
 def _env_or_default(name: str, default: Optional[str]) -> Optional[str]:
@@ -42,6 +43,55 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--visitas-date-order", dest="visitas_date_order", default="DMY")
     parser.add_argument("--division-sheet", dest="division_sheet", default=None)
     parser.add_argument("--visitas-sheet", dest="visitas_sheet", default=None)
+    parser.add_argument(
+        "--header-max-rows",
+        dest="header_max_rows",
+        type=int,
+        default=None,
+        help="Límite de filas a inspeccionar para encabezados genéricos (HEADER_MAX_ROWS)",
+    )
+    parser.add_argument(
+        "--header-default-row",
+        dest="header_default_row",
+        type=int,
+        default=None,
+        help="Fila predeterminada para encabezados genéricos (HEADER_DEFAULT_ROW)",
+    )
+    parser.add_argument(
+        "--visitas-max-rows",
+        dest="visitas_max_rows",
+        type=int,
+        default=None,
+        help="Límite de filas para buscar encabezados de visitas (VISITAS_MAX_ROWS)",
+    )
+    parser.add_argument(
+        "--visitas-default-row",
+        dest="visitas_default_row",
+        type=int,
+        default=None,
+        help="Fila predeterminada para encabezados de visitas (VISITAS_DEFAULT_ROW)",
+    )
+    parser.add_argument(
+        "--cargas-max-rows",
+        dest="cargas_max_rows",
+        type=int,
+        default=None,
+        help="Límite de filas para encabezados de cargas/servicios (CARGAS_MAX_ROWS)",
+    )
+    parser.add_argument(
+        "--cargas-default-row",
+        dest="cargas_default_row",
+        type=int,
+        default=None,
+        help="Fila predeterminada para cargas/servicios (CARGAS_DEFAULT_ROW)",
+    )
+    parser.add_argument(
+        "--two-digit-year-base",
+        dest="two_digit_year_base",
+        type=int,
+        default=None,
+        help="Año base para fechas con dos dígitos (TWO_DIGIT_YEAR_BASE)",
+    )
     args = parser.parse_args(argv)
 
     if not args.output_csv and not args.output_excel:
@@ -52,6 +102,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
+    settings = Settings.from_env().override_with_cli(args)
     if not args.output_csv and not args.output_excel:
         raise SystemExit("--output-csv o --output-excel es obligatorio")
     if not args.division_file:
@@ -59,8 +110,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not args.visitas_file:
         raise SystemExit("--visitas-file o la variable de entorno VISITAS_FILE es obligatoria")
 
-    div_df = read_division_excel(args.division_file, date_order=args.division_date_order, sheet_name=args.division_sheet)
-    visitas_df = read_visitas_excel(args.visitas_file, date_order=args.visitas_date_order, sheet_name=args.visitas_sheet)
+    div_df = read_division_excel(
+        args.division_file,
+        date_order=args.division_date_order,
+        sheet_name=args.division_sheet,
+        settings=settings,
+    )
+    visitas_df = read_visitas_excel(
+        args.visitas_file,
+        date_order=args.visitas_date_order,
+        sheet_name=args.visitas_sheet,
+        settings=settings,
+    )
     timeline_df = build_timeline(div_df, visitas_df)
 
     if args.output_csv:

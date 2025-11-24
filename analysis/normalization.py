@@ -26,6 +26,8 @@ import re
 import unicodedata
 from typing import Iterable, List, Optional, Sequence
 
+from .settings import Settings
+
 
 ACCENT_REPLACEMENTS = str.maketrans(
     {
@@ -101,8 +103,9 @@ def find_header_row(
     data: "pandas.DataFrame",
     required_normalized_headers: Sequence[str] | None = None,
     *,
-    max_rows: int = 25,
-    default_row: int | None = 5,
+    max_rows: int | None = None,
+    default_row: int | None = None,
+    settings: Settings | None = None,
 ) -> int:
     """Locate the header row similarly to ``FindHeaderRow`` in VBA.
 
@@ -126,13 +129,15 @@ def find_header_row(
             normalize("Hora Inicio"),
         )
 
-    max_rows = min(max_rows, len(data))
+    config = settings or Settings.from_env()
+    max_rows = min(max_rows if max_rows is not None else config.header_max_rows, len(data))
     for idx in range(max_rows):
         row = data.iloc[idx].fillna("")
         normalized = {normalize(v) for v in row.tolist()}
         if all(key in normalized for key in required_normalized_headers):
             return idx
-    return default_row if default_row is not None else 0
+    fallback_row = default_row if default_row is not None else config.header_default_row
+    return fallback_row if fallback_row is not None else 0
 
 
 def find_col_any_in_row(data: "pandas.DataFrame", header_row: int, aliases: Sequence[str]) -> int:
@@ -181,7 +186,7 @@ def _excel_serial_to_date(value: float) -> date:
     return (EXCEL_EPOCH + timedelta(days=float(value))).date()
 
 
-def date_only_ex2(value, order: str) -> Optional[date]:
+def date_only_ex2(value, order: str, *, settings: Settings | None = None) -> Optional[date]:
     """Parse dates written as MDY/DMY strings or Excel serials.
 
     The behaviour mirrors ``DateOnlyEx2``: on invalid input ``None`` is
@@ -230,8 +235,9 @@ def date_only_ex2(value, order: str) -> Optional[date]:
     except ValueError:
         return None
 
+    config = settings or Settings.from_env()
     if y < 100:
-        y += 2000
+        y += config.two_digit_year_base
 
     try:
         return date(y, m, d)
@@ -324,7 +330,9 @@ def servicio_id_from_components(vehiculo: str, fecha, secuencial: int) -> str:
     return f"{veh_key}-{fecha_key}-{secuencial:03d}"
 
 
-def find_header_row_visitas(data: "pandas.DataFrame", default_row: int = 7) -> int:
+def find_header_row_visitas(
+    data: "pandas.DataFrame", default_row: int | None = None, *, settings: Settings | None = None
+) -> int:
     aliases = {
         "unidad",
         "economico",
@@ -336,23 +344,31 @@ def find_header_row_visitas(data: "pandas.DataFrame", default_row: int = 7) -> i
     hora_aliases = {"horallegada", "hora llegada", "hllegada", "horafecha", "hora"}
     cat_aliases = {"categoria", "categora", "categoriavisita", "tipovisita", "tipo", "categora visita"}
 
-    for idx in range(min(100, len(data))):
+    config = settings or Settings.from_env()
+    fallback_row = default_row if default_row is not None else config.visitas_default_row
+
+    for idx in range(min(config.visitas_max_rows, len(data))):
         row = {normalize(v) for v in data.iloc[idx].fillna("").tolist()}
         if row & aliases and row & fecha_aliases and row & hora_aliases and row & cat_aliases:
             return idx
-    return default_row
+    return fallback_row
 
 
-def find_header_row_cargas(data: "pandas.DataFrame", default_row: int = 0) -> int:
+def find_header_row_cargas(
+    data: "pandas.DataFrame", default_row: int | None = None, *, settings: Settings | None = None
+) -> int:
     unidad_aliases = {"unidad", "vehiculo", "vehculo", "carro"}
     fecha_aliases = {"fecha", "fregistro", "f registro", "fservicio"}
     division_aliases = {"division", "divisin", "div"}
 
-    for idx in range(min(100, len(data))):
+    config = settings or Settings.from_env()
+    fallback_row = default_row if default_row is not None else config.cargas_default_row
+
+    for idx in range(min(config.cargas_max_rows, len(data))):
         row = {normalize(v) for v in data.iloc[idx].fillna("").tolist()}
         if row & unidad_aliases and row & fecha_aliases and row & division_aliases:
             return idx
-    return default_row
+    return fallback_row
 
 
 def extraer_division_desde_nombre(file_name: str) -> str:
@@ -390,11 +406,14 @@ def _require_pandas():
     return pd
 
 
-def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str | None = None):
+def read_division_excel(
+    path: str, *, date_order: str = "MDY", sheet_name: str | None = None, settings: Settings | None = None
+):
     pd = _require_pandas()
+    config = settings or Settings.from_env()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
-    header_row = find_header_row(raw)
+    header_row = find_header_row(raw, settings=config)
 
     col_km = find_col_any_in_row(raw, header_row, ["Kilómetros", "KMS", "Kilometros"])
     col_fecha = find_col_any_in_row(raw, header_row, ["Fecha Inicio", "F Servicio", "Fecha", "F_Servicio"])
@@ -457,11 +476,18 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     )
 
 
-def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY"):
+def read_visitas_excel(
+    path: str,
+    *,
+    sheet_name: str | None = None,
+    date_order: str = "DMY",
+    settings: Settings | None = None,
+):
     pd = _require_pandas()
+    config = settings or Settings.from_env()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
-    header_row = find_header_row_visitas(raw)
+    header_row = find_header_row_visitas(raw, settings=config)
 
     col_unidad = find_col_any_in_row(raw, header_row, ["Unidad", "Económico", "Economico", "No Economico", "NoEconomico"])
     col_fecha = find_col_any_in_row(raw, header_row, ["Fecha Llegada", "FechaLlegada", "Fecha Arribo", "Fecha", "F Llegada"])
@@ -482,13 +508,13 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
         if not vehiculo:
             continue
 
-        fecha = date_only_ex2(row[col_fecha], date_order)
+        fecha = date_only_ex2(row[col_fecha], date_order, settings=config)
         hora_sec = time_to_sec_ex(row[col_hora])
         if not fecha:
             continue
 
         fecha_sal_val = row[col_fecha_sal] if col_fecha_sal >= 0 else None
-        fecha_sal = date_only_ex2(fecha_sal_val, date_order) if fecha_sal_val is not None else None
+        fecha_sal = date_only_ex2(fecha_sal_val, date_order, settings=config) if fecha_sal_val is not None else None
         hora_sal_val = row[col_hora_sal] if col_hora_sal >= 0 else None
         hora_sal_sec = time_to_sec_ex(hora_sal_val) if hora_sal_val is not None else 0
         duracion_val = row[col_duracion] if col_duracion >= 0 else None
