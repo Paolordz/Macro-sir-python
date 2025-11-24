@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from itertools import repeat
 import os
 import re
 import unicodedata
@@ -517,18 +518,25 @@ def build_timeline(divisiones, visitas):
     if divisiones is not None and len(divisiones):
         eventos.append(divisiones)
     if visitas is not None and len(visitas):
-        visitas_norm = visitas.copy()
-        visitas_norm["km"] = 0.0
-        visitas_norm["minutos"] = (visitas_norm["fin"] - visitas_norm["inicio"]).dt.total_seconds() / 60.0
-        visitas_norm["cliente_site"] = visitas_norm.get("sitio", "")
-        visitas_norm["division"] = visitas_norm.get("division", "")
-        vehiculos = visitas_norm["vehiculo"]
+        visitas_norm = visitas.assign(
+            km=0.0,
+            minutos=(visitas["fin"] - visitas["inicio"]).dt.total_seconds() / 60.0,
+            cliente_site=visitas.get("sitio", ""),
+            division=visitas.get("division", ""),
+        )
+
         fechas = visitas_norm["inicio"].dt.date
-        visitas_norm["servicio_id"] = [
-            servicio_id_from_components(vehiculo, fecha, 0)
-            for vehiculo, fecha in zip(vehiculos, fechas)
-        ]
-        eventos.append(visitas_norm)
+        servicio_ids = pd.Series(
+            map(
+                servicio_id_from_components,
+                visitas_norm["vehiculo"],
+                fechas,
+                repeat(0),
+            ),
+            index=visitas_norm.index,
+        )
+
+        eventos.append(visitas_norm.assign(servicio_id=servicio_ids))
 
     if not eventos:
         return pd.DataFrame()
