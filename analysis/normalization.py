@@ -19,6 +19,7 @@ accept the same loose input formats that were tolerated by the macros:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import date, datetime, time, timedelta
 from itertools import repeat
 import os
@@ -239,7 +240,7 @@ def date_only_ex2(value, order: str) -> Optional[date]:
         return None
 
 
-def time_to_sec_ex(value) -> int:
+def _time_to_sec_ex_uncached(value) -> int:
     """Parse times written as ``hh:mm[:ss]`` or ``hhmm`` numbers.
 
     Invalid values return ``0`` as in the VBA version.
@@ -279,11 +280,29 @@ def time_to_sec_ex(value) -> int:
     return h * 3600 + m * 60 + s
 
 
+@lru_cache(maxsize=4096)
+def _time_to_sec_ex_cached(value) -> int:
+    return _time_to_sec_ex_uncached(value)
+
+
+def time_to_sec_ex(value) -> int:
+    try:
+        return _time_to_sec_ex_cached(value)
+    except TypeError:
+        return _time_to_sec_ex_uncached(value)
+
+
 def _seconds_to_time(seconds: int) -> time:
     seconds = max(0, int(seconds)) % (24 * 3600)
     h, remainder = divmod(seconds, 3600)
     m, s = divmod(remainder, 60)
     return time(hour=h, minute=m, second=s)
+
+
+@lru_cache(maxsize=2048)
+def _normalize_vehiculo_key_cached(text: str) -> str:
+    filtered = re.sub(r"[^0-9A-Za-z]", "", text)
+    return filtered.upper()
 
 
 def normalize_vehiculo_key(value) -> str:
@@ -305,8 +324,7 @@ def normalize_vehiculo_key(value) -> str:
     if text.lower() == "none":
         return ""
 
-    filtered = re.sub(r"[^0-9A-Za-z]", "", text)
-    return filtered.upper()
+    return _normalize_vehiculo_key_cached(text)
 
 
 def servicio_id_from_components(vehiculo: str, fecha, secuencial: int) -> str:
@@ -390,6 +408,44 @@ def _require_pandas():
     return pd
 
 
+def _time_series_to_seconds(series: "pandas.Series") -> "pandas.Series":
+    """Vectorised equivalent of ``time_to_sec_ex`` for pandas series."""
+
+    pd = _require_pandas()
+    if series.empty:
+        return pd.Series(dtype="int64")
+
+    text = series.astype(str).str.strip()
+    text = text.mask(text.str.lower().isin(["", "none", "nan"]))
+
+    numeric = pd.to_numeric(text, errors="coerce")
+
+    seconds = pd.Series(0, index=series.index, dtype="float")
+
+    fractional_mask = numeric.notna() & numeric.lt(1)
+    seconds.loc[fractional_mask] = (numeric.loc[fractional_mask] * 86400).round()
+
+    colon_mask = text.str.contains(":", regex=False, na=False)
+    colon_parts = text.where(colon_mask).str.split(":", expand=True)
+    while colon_parts.shape[1] < 3:
+        colon_parts[colon_parts.shape[1]] = "0"
+    colon_parts = colon_parts.iloc[:, :3].fillna("0")
+    h = pd.to_numeric(colon_parts.iloc[:, 0], errors="coerce")
+    m = pd.to_numeric(colon_parts.iloc[:, 1], errors="coerce")
+    s = pd.to_numeric(colon_parts.iloc[:, 2], errors="coerce")
+    valid_colon = h.between(0, 47) & m.between(0, 59) & s.between(0, 59)
+    seconds.loc[colon_mask & valid_colon] = (h * 3600 + m * 60 + s).where(valid_colon, 0)
+
+    hhmm_mask = (~colon_mask) & numeric.notna() & ~fractional_mask
+    hhmm_values = numeric.loc[hhmm_mask].astype(int)
+    hours = hhmm_values.floordiv(100)
+    minutes = hhmm_values.mod(100)
+    valid_hhmm = hours.between(0, 47) & minutes.between(0, 59)
+    seconds.loc[hhmm_mask] = (hours * 3600 + minutes * 60).where(valid_hhmm, 0)
+
+    return seconds.fillna(0).astype(int)
+
+
 def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str | None = None):
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
@@ -419,15 +475,22 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     data = data.loc[valid_rows].reset_index(drop=True)
     fecha = fecha.loc[valid_rows].reset_index(drop=True)
 
-    hora_ini_sec = data.iloc[:, col_hora_ini].apply(time_to_sec_ex)
+    hora_ini_sec = _time_series_to_seconds(data.iloc[:, col_hora_ini])
     hora_fin_sec = (
-        data.iloc[:, col_hora_fin].apply(time_to_sec_ex)
+        _time_series_to_seconds(data.iloc[:, col_hora_fin])
         if col_hora_fin >= 0
         else hora_ini_sec
     )
 
     vehiculo_raw = data.iloc[:, col_veh] if col_veh >= 0 else pd.Series("", index=data.index)
-    vehiculo = vehiculo_raw.apply(normalize_vehiculo_key)
+    vehiculo = (
+        vehiculo_raw.fillna("")
+        .astype(str)
+        .str.strip()
+        .mask(lambda s: s.str.lower().eq("none"), "")
+        .str.replace(r"[^0-9A-Za-z]", "", regex=True)
+        .str.upper()
+    )
 
     cliente_raw = data.iloc[:, col_cliente] if col_cliente >= 0 else pd.Series("", index=data.index)
     cliente = cliente_raw.apply(lambda v: "" if pd.isna(v) else str(v).strip())

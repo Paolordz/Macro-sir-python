@@ -1,6 +1,7 @@
 import datetime as dt
 
 import pytest
+import pandas as pd
 
 from analysis.normalization import (
     CatCategory,
@@ -46,3 +47,14 @@ def test_cat_category_guesses_from_site():
     assert CatCategory.from_raw("Patio Central").nombre == "Patio"
     fallback = CatCategory.from_raw("otros")
     assert fallback.guess_from_site("Taller Norte").nombre == "Taller"
+
+
+def test_time_series_to_seconds_vectorized_matches_elementwise():
+    from analysis.normalization import _time_series_to_seconds
+
+    series = pd.Series(["12:30", "0730", 0.5, "99:99", None])
+    expected = series.apply(time_to_sec_ex)
+
+    result = _time_series_to_seconds(series)
+
+    assert result.tolist() == expected.tolist()
