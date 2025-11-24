@@ -407,7 +407,8 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
         raise ValueError("No se pudieron detectar las columnas obligatorias (kilómetros, fecha, hora inicio)")
 
     records: List[dict] = []
-    for _, row in raw.iloc[header_row + 1 :].iterrows():
+    division = extraer_division_desde_nombre(path)
+    for row in raw.iloc[header_row + 1 :].itertuples(index=False):
         fecha = date_only_ex2(row[col_fecha], date_order)
         if not fecha:
             continue
@@ -423,7 +424,7 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
 
         records.append(
             {
-                "division": extraer_division_desde_nombre(path),
+                "division": division,
                 "vehiculo": vehiculo,
                 "inicio": start_dt,
                 "fin": end_dt,
@@ -457,7 +458,7 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
         raise ValueError("Visitas: faltan columnas mínimas (Unidad, Fecha/Hora Llegada)")
 
     records: List[dict] = []
-    for _, row in raw.iloc[header_row + 1 :].iterrows():
+    for row in raw.iloc[header_row + 1 :].itertuples(index=False):
         vehiculo_raw = row[col_unidad]
         vehiculo = normalize_vehiculo_key(vehiculo_raw)
         if not vehiculo:
