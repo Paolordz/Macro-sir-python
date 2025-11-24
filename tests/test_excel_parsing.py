@@ -67,12 +67,12 @@ def test_read_division_and_visitas(sample_division_file: Path, sample_visitas_fi
     div_df = read_division_excel(sample_division_file, date_order="MDY")
     visitas_df = read_visitas_excel(sample_visitas_file, date_order="DMY")
 
-    assert set(div_df.columns) >= {"vehiculo", "inicio", "fin", "servicio_id"}
-    assert set(visitas_df.columns) >= {"vehiculo", "inicio", "fin", "categoria"}
+    assert set(div_df.columns) >= {"vehicle_id", "start_time", "end_time", "service_id", "division_name"}
+    assert set(visitas_df.columns) >= {"vehicle_id", "start_time", "end_time", "visit_category"}
 
     timeline = build_timeline(div_df, visitas_df)
     assert len(timeline) == len(div_df) + len(visitas_df)
-    assert list(timeline.sort_values("inicio").vehiculo.unique()) == ["AA01", "BB02"]
+    assert list(timeline.sort_values("start_time").vehicle_id.unique()) == ["AA01", "BB02"]
 
 
 def test_cli_requires_output(sample_division_file: Path, sample_visitas_file: Path, capsys):

@@ -43,6 +43,6 @@ def test_servicio_id_matches_vba_format():
 
 
 def test_cat_category_guesses_from_site():
-    assert CatCategory.from_raw("Patio Central").nombre == "Patio"
+    assert CatCategory.from_raw("Patio Central").name == "Patio"
     fallback = CatCategory.from_raw("otros")
-    assert fallback.guess_from_site("Taller Norte").nombre == "Taller"
+    assert fallback.guess_from_site("Taller Norte").name == "Taller"

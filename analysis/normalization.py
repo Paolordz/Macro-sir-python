@@ -15,6 +15,19 @@ accept the same loose input formats that were tolerated by the macros:
   reports.
 * ``normalize_vehiculo_key`` and ``servicio_id_from_components`` keep the
   same "vehicle-date-sequence" identifiers that the VBA produced.
+
+Public DataFrames follow an **English, snake_case naming convention** to
+make column purposes clear and consistent across outputs. The standard
+columns are:
+
+* ``division_name``: label inferred from the source file name (e.g. ``Division Norte``).
+* ``vehicle_id``: sanitized vehicle/economic identifier.
+* ``start_time`` / ``end_time``: datetime boundaries for the event.
+* ``distance_km`` and ``duration_minutes``: numeric measures for services/visits.
+* ``client_site``: client/site label when available.
+* ``service_id``: stable composite identifier produced by
+  ``servicio_id_from_components``.
+* ``event_type``: ``SERVICE`` or ``VISIT`` depending on the origin row.
 """
 from __future__ import annotations
 
@@ -154,7 +167,7 @@ def find_col_any_in_row(data: "pandas.DataFrame", header_row: int, aliases: Sequ
 
 @dataclass(frozen=True)
 class CatCategory:
-    nombre: str
+    name: str
 
     @classmethod
     def from_raw(cls, raw: str) -> "CatCategory":
@@ -169,7 +182,7 @@ class CatCategory:
 
     def guess_from_site(self, site: str) -> "CatCategory":
         guessed = CatCategory.from_raw(site)
-        if self.nombre == "Otros" and guessed.nombre != "Otros":
+        if self.name == "Otros" and guessed.name != "Otros":
             return guessed
         return self
 
@@ -426,34 +439,34 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
         else hora_ini_sec
     )
 
-    vehiculo_raw = data.iloc[:, col_veh] if col_veh >= 0 else pd.Series("", index=data.index)
-    vehiculo = vehiculo_raw.apply(normalize_vehiculo_key)
+    vehicle_id_raw = data.iloc[:, col_veh] if col_veh >= 0 else pd.Series("", index=data.index)
+    vehicle_id = vehicle_id_raw.apply(normalize_vehiculo_key)
 
-    cliente_raw = data.iloc[:, col_cliente] if col_cliente >= 0 else pd.Series("", index=data.index)
-    cliente = cliente_raw.apply(lambda v: "" if pd.isna(v) else str(v).strip())
+    client_raw = data.iloc[:, col_cliente] if col_cliente >= 0 else pd.Series("", index=data.index)
+    client_site = client_raw.apply(lambda v: "" if pd.isna(v) else str(v).strip())
 
-    km = pd.to_numeric(data.iloc[:, col_km], errors="coerce").fillna(0.0)
+    distance_km = pd.to_numeric(data.iloc[:, col_km], errors="coerce").fillna(0.0)
 
-    inicio = pd.to_datetime(fecha) + pd.to_timedelta(hora_ini_sec, unit="s")
-    fin = pd.to_datetime(fecha) + pd.to_timedelta(hora_fin_sec, unit="s")
-    minutos = (fin - inicio).dt.total_seconds().div(60).clip(lower=0.0)
+    start_time = pd.to_datetime(fecha) + pd.to_timedelta(hora_ini_sec, unit="s")
+    end_time = pd.to_datetime(fecha) + pd.to_timedelta(hora_fin_sec, unit="s")
+    duration_minutes = (end_time - start_time).dt.total_seconds().div(60).clip(lower=0.0)
 
-    division = extraer_division_desde_nombre(path)
-    servicio_ids = [
-        servicio_id_from_components(veh, fec, idx)
-        for idx, (veh, fec) in enumerate(zip(vehiculo.tolist(), fecha.tolist()))
+    division_name = extraer_division_desde_nombre(path)
+    service_ids = [
+        servicio_id_from_components(vehicle, service_date, idx)
+        for idx, (vehicle, service_date) in enumerate(zip(vehicle_id.tolist(), fecha.tolist()))
     ]
 
     return pd.DataFrame().assign(
-        division=division,
-        vehiculo=vehiculo,
-        inicio=inicio,
-        fin=fin,
-        km=km,
-        minutos=minutos,
-        cliente_site=cliente,
-        servicio_id=servicio_ids,
-        tipo="SERVICIO",
+        division_name=division_name,
+        vehicle_id=vehicle_id,
+        start_time=start_time,
+        end_time=end_time,
+        distance_km=distance_km,
+        duration_minutes=duration_minutes,
+        client_site=client_site,
+        service_id=service_ids,
+        event_type="SERVICE",
     )
 
 
@@ -477,49 +490,51 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
 
     records: List[dict] = []
     for row in raw.iloc[header_row + 1 :].itertuples(index=False, name=None):
-        vehiculo_raw = row[col_unidad]
-        vehiculo = normalize_vehiculo_key(vehiculo_raw)
-        if not vehiculo:
+        vehicle_id_raw = row[col_unidad]
+        vehicle_id = normalize_vehiculo_key(vehicle_id_raw)
+        if not vehicle_id:
             continue
 
-        fecha = date_only_ex2(row[col_fecha], date_order)
-        hora_sec = time_to_sec_ex(row[col_hora])
-        if not fecha:
+        arrival_date = date_only_ex2(row[col_fecha], date_order)
+        arrival_seconds = time_to_sec_ex(row[col_hora])
+        if not arrival_date:
             continue
 
-        fecha_sal_val = row[col_fecha_sal] if col_fecha_sal >= 0 else None
-        fecha_sal = date_only_ex2(fecha_sal_val, date_order) if fecha_sal_val is not None else None
-        hora_sal_val = row[col_hora_sal] if col_hora_sal >= 0 else None
-        hora_sal_sec = time_to_sec_ex(hora_sal_val) if hora_sal_val is not None else 0
-        duracion_val = row[col_duracion] if col_duracion >= 0 else None
-        duracion = time_to_sec_ex(duracion_val) if duracion_val is not None else 0
+        departure_date_raw = row[col_fecha_sal] if col_fecha_sal >= 0 else None
+        departure_date = (
+            date_only_ex2(departure_date_raw, date_order) if departure_date_raw is not None else None
+        )
+        departure_seconds_raw = row[col_hora_sal] if col_hora_sal >= 0 else None
+        departure_seconds = time_to_sec_ex(departure_seconds_raw) if departure_seconds_raw is not None else 0
+        duration_seconds_raw = row[col_duracion] if col_duracion >= 0 else None
+        duration_seconds = time_to_sec_ex(duration_seconds_raw) if duration_seconds_raw is not None else 0
 
-        inicio_abs = datetime.combine(fecha, _seconds_to_time(hora_sec))
-        if fecha_sal or hora_sal_sec:
-            fecha_dest = fecha_sal or fecha
-            fin_abs = datetime.combine(fecha_dest, _seconds_to_time(hora_sal_sec))
-        elif duracion:
-            fin_abs = inicio_abs + timedelta(seconds=duracion)
+        start_time = datetime.combine(arrival_date, _seconds_to_time(arrival_seconds))
+        if departure_date or departure_seconds:
+            chosen_departure_date = departure_date or arrival_date
+            end_time = datetime.combine(chosen_departure_date, _seconds_to_time(departure_seconds))
+        elif duration_seconds:
+            end_time = start_time + timedelta(seconds=duration_seconds)
         else:
-            fin_abs = inicio_abs
+            end_time = start_time
 
-        if (fin_abs - inicio_abs).total_seconds() < 60:
+        if (end_time - start_time).total_seconds() < 60:
             continue
 
         cat_val = row[col_cat] if col_cat >= 0 else None
         cat_raw = str(cat_val).strip() if cat_val is not None and not pd.isna(cat_val) else ""
         sitio_val = row[col_sitio] if col_sitio >= 0 else None
         sitio_raw = str(sitio_val).strip() if sitio_val is not None and not pd.isna(sitio_val) else ""
-        categoria = CatCategory.from_raw(cat_raw).guess_from_site(sitio_raw).nombre
+        categoria = CatCategory.from_raw(cat_raw).guess_from_site(sitio_raw).name
 
         records.append(
             {
-                "vehiculo": vehiculo,
-                "inicio": inicio_abs,
-                "fin": fin_abs,
-                "categoria": categoria,
-                "sitio": sitio_raw,
-                "tipo": "VISITA",
+                "vehicle_id": vehicle_id,
+                "start_time": start_time,
+                "end_time": end_time,
+                "visit_category": categoria,
+                "site_name": sitio_raw,
+                "event_type": "VISIT",
             }
         )
 
@@ -533,30 +548,31 @@ def build_timeline(divisiones, visitas):
         eventos.append(divisiones)
     if visitas is not None and len(visitas):
         visitas_norm = visitas.assign(
-            km=0.0,
-            minutos=(visitas["fin"] - visitas["inicio"]).dt.total_seconds() / 60.0,
-            cliente_site=visitas.get("sitio", ""),
-            division=visitas.get("division", ""),
+            distance_km=0.0,
+            duration_minutes=(visitas["end_time"] - visitas["start_time"]).dt.total_seconds() / 60.0,
+            client_site=visitas.get("site_name", ""),
+            division_name=visitas.get("division_name", ""),
+            event_type="VISIT",
         )
 
-        fechas = visitas_norm["inicio"].dt.date
+        fechas = visitas_norm["start_time"].dt.date
         servicio_ids = pd.Series(
             map(
                 servicio_id_from_components,
-                visitas_norm["vehiculo"],
+                visitas_norm["vehicle_id"],
                 fechas,
                 repeat(0),
             ),
             index=visitas_norm.index,
         )
 
-        eventos.append(visitas_norm.assign(servicio_id=servicio_ids))
+        eventos.append(visitas_norm.assign(service_id=servicio_ids))
 
     if not eventos:
         return pd.DataFrame()
 
     timeline = pd.concat(eventos, ignore_index=True)
-    timeline = timeline.sort_values(["vehiculo", "inicio"]).reset_index(drop=True)
+    timeline = timeline.sort_values(["vehicle_id", "start_time"]).reset_index(drop=True)
     return timeline
 
 

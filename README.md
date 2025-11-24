@@ -31,6 +31,22 @@ python -m analysis.cli \
 También pueden usarse variables de entorno `DIVISION_FILE`, `VISITAS_FILE`,
 `OUTPUT_CSV` y `OUTPUT_XLSX` para evitar argumentos explícitos.
 
+## Convención de nombres
+
+Todas las tablas generadas usan **nombres en inglés con `snake_case`** para
+que cada columna sea autoexplicativa. Las principales son:
+
+- `division_name`: etiqueta derivada del nombre del archivo de división
+  (por ejemplo `Division Norte`).
+- `vehicle_id`: identificador sanitizado del vehículo/unidad.
+- `start_time` y `end_time`: límites temporales del servicio o visita.
+- `distance_km` y `duration_minutes`: medidas numéricas coherentes entre
+  servicios y visitas.
+- `client_site`: cliente o sitio relacionado, cuando el dato existe.
+- `service_id`: identificador estable generado a partir de vehículo, fecha y
+  secuencia.
+- `event_type`: valores `SERVICE` o `VISIT` según el origen de la fila.
+
 ## Dependencias
 
 Se requieren `pandas` y `openpyxl` para leer archivos Excel. Instala los
