@@ -27,6 +27,41 @@ import unicodedata
 from typing import Iterable, List, Optional, Sequence
 
 
+class NormalizationError(ValueError):
+    """Base exception for normalization errors with location context."""
+
+    def __init__(self, message: str, *, value=None, row: int | None = None, column: int | None = None):
+        location_parts = []
+        if row is not None:
+            location_parts.append(f"fila {row}")
+        if column is not None:
+            location_parts.append(f"columna {column}")
+
+        location_suffix = f" en {' '.join(location_parts)}" if location_parts else ""
+        value_suffix = f" (valor: {value!r})" if value is not None else ""
+
+        super().__init__(f"{message}{value_suffix}{location_suffix}")
+        self.value = value
+        self.row = row
+        self.column = column
+
+
+class InvalidVehicleKeyError(NormalizationError):
+    """Raised when a vehicle identifier cannot be normalized."""
+
+
+class InvalidDateComponentError(NormalizationError):
+    """Raised when a date field cannot be parsed."""
+
+
+class InvalidTimeComponentError(NormalizationError):
+    """Raised when a time field cannot be parsed."""
+
+
+class InvalidNumericComponentError(NormalizationError):
+    """Raised when a numeric field cannot be parsed."""
+
+
 ACCENT_REPLACEMENTS = str.maketrans(
     {
         "á": "a",
@@ -181,7 +216,7 @@ def _excel_serial_to_date(value: float) -> date:
     return (EXCEL_EPOCH + timedelta(days=float(value))).date()
 
 
-def date_only_ex2(value, order: str) -> Optional[date]:
+def date_only_ex2(value, order: str, *, raise_on_error: bool = False, row: int | None = None, column: int | None = None) -> Optional[date]:
     """Parse dates written as MDY/DMY strings or Excel serials.
 
     The behaviour mirrors ``DateOnlyEx2``: on invalid input ``None`` is
@@ -189,6 +224,8 @@ def date_only_ex2(value, order: str) -> Optional[date]:
     """
 
     if value is None:
+        if raise_on_error:
+            raise InvalidDateComponentError("Fecha vacía", value=value, row=row, column=column)
         return None
     if isinstance(value, date) and not isinstance(value, datetime):
         return value
@@ -206,6 +243,8 @@ def date_only_ex2(value, order: str) -> Optional[date]:
 
     text = str(value).strip()
     if not text:
+        if raise_on_error:
+            raise InvalidDateComponentError("Fecha vacía", value=value, row=row, column=column)
         return None
 
     separators = ["-", "/"]
@@ -214,9 +253,13 @@ def date_only_ex2(value, order: str) -> Optional[date]:
             parts = text.split(sep)
             break
     else:
+        if raise_on_error:
+            raise InvalidDateComponentError("Formato de fecha inválido", value=value, row=row, column=column)
         return None
 
     if len(parts) != 3:
+        if raise_on_error:
+            raise InvalidDateComponentError("Formato de fecha incompleto", value=value, row=row, column=column)
         return None
 
     try:
@@ -226,8 +269,12 @@ def date_only_ex2(value, order: str) -> Optional[date]:
         elif order == "DMY":
             d, m, y = (int(p) for p in parts)
         else:
+            if raise_on_error:
+                raise InvalidDateComponentError("Orden de fecha desconocido", value=value, row=row, column=column)
             return None
-    except ValueError:
+    except ValueError as exc:
+        if raise_on_error:
+            raise InvalidDateComponentError("Componentes de fecha no numéricos", value=value, row=row, column=column) from exc
         return None
 
     if y < 100:
@@ -235,18 +282,26 @@ def date_only_ex2(value, order: str) -> Optional[date]:
 
     try:
         return date(y, m, d)
-    except ValueError:
+    except ValueError as exc:
+        if raise_on_error:
+            raise InvalidDateComponentError("Fecha fuera de rango", value=value, row=row, column=column) from exc
         return None
 
 
-def time_to_sec_ex(value) -> int:
+def time_to_sec_ex(value, *, raise_on_error: bool = False, row: int | None = None, column: int | None = None) -> int:
     """Parse times written as ``hh:mm[:ss]`` or ``hhmm`` numbers.
 
-    Invalid values return ``0`` as in the VBA version.
+    Invalid values return ``0`` as in the VBA version unless
+    ``raise_on_error`` is ``True``.
     """
 
-    if value is None:
+    def _fail(message: str) -> int:
+        if raise_on_error:
+            raise InvalidTimeComponentError(message, value=value, row=row, column=column)
         return 0
+
+    if value is None:
+        return _fail("Hora vacía")
 
     if isinstance(value, (int, float)):
         if float(value) < 1:
@@ -255,7 +310,10 @@ def time_to_sec_ex(value) -> int:
 
     text = str(value).strip()
     if not text:
-        return 0
+        return _fail("Hora vacía")
+
+    parsed = False
+    h = m = s = 0
 
     if ":" in text:
         parts = text.split(":")
@@ -263,18 +321,20 @@ def time_to_sec_ex(value) -> int:
             h = int(parts[0])
             m = int(parts[1]) if len(parts) >= 2 else 0
             s = int(parts[2]) if len(parts) >= 3 else 0
+            parsed = True
         except ValueError:
-            return 0
+            parsed = False
     else:
         try:
             number = int(text)
+            h, m = divmod(number, 100)
+            s = 0
+            parsed = True
         except ValueError:
-            return 0
-        h, m = divmod(number, 100)
-        s = 0
+            parsed = False
 
-    if not (0 <= h <= 47 and 0 <= m <= 59 and 0 <= s <= 59):
-        return 0
+    if not parsed or not (0 <= h <= 47 and 0 <= m <= 59 and 0 <= s <= 59):
+        return _fail("Formato de hora inválido")
 
     return h * 3600 + m * 60 + s
 
@@ -286,26 +346,36 @@ def _seconds_to_time(seconds: int) -> time:
     return time(hour=h, minute=m, second=s)
 
 
-def normalize_vehiculo_key(value) -> str:
+def normalize_vehiculo_key(value, *, raise_on_error: bool = False, row: int | None = None, column: int | None = None) -> str:
     """Return an upper-case alphanumeric vehicle key.
 
     Mirrors ``NormalizeVehiculoKey`` by removing any non-alphanumeric
     character. If the value cannot be converted to string an empty key is
-    returned.
+    returned unless ``raise_on_error`` is ``True``.
     """
 
     if value is None:
+        if raise_on_error:
+            raise InvalidVehicleKeyError("Clave de vehículo vacía", value=value, row=row, column=column)
         return ""
 
     try:
         text = str(value).strip()
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - precise handling below
+        if raise_on_error:
+            raise InvalidVehicleKeyError("No se pudo convertir la clave de vehículo", value=value, row=row, column=column) from exc
         return ""
 
-    if text.lower() == "none":
+    if text.lower() == "none" or not text:
+        if raise_on_error:
+            raise InvalidVehicleKeyError("Clave de vehículo vacía", value=value, row=row, column=column)
         return ""
 
     filtered = re.sub(r"[^0-9A-Za-z]", "", text)
+    if not filtered:
+        if raise_on_error:
+            raise InvalidVehicleKeyError("Clave de vehículo inválida", value=value, row=row, column=column)
+        return ""
     return filtered.upper()
 
 
@@ -390,6 +460,17 @@ def _require_pandas():
     return pd
 
 
+def _has_value(value) -> bool:
+    try:
+        import pandas as pd  # type: ignore
+    except ModuleNotFoundError:
+        pd = None
+
+    if pd is not None and pd.isna(value):
+        return False
+    return value is not None and str(value).strip() != ""
+
+
 def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str | None = None):
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
@@ -409,52 +490,92 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
 
     data = raw.iloc[header_row + 1 :].reset_index(drop=True)
 
-    fecha = pd.to_datetime(
-        data.iloc[:, col_fecha],
-        errors="coerce",
-        dayfirst=date_order.strip().upper() == "DMY",
-    ).dt.date
-
-    valid_rows = fecha.notna()
-    data = data.loc[valid_rows].reset_index(drop=True)
-    fecha = fecha.loc[valid_rows].reset_index(drop=True)
-
-    hora_ini_sec = data.iloc[:, col_hora_ini].apply(time_to_sec_ex)
-    hora_fin_sec = (
-        data.iloc[:, col_hora_fin].apply(time_to_sec_ex)
-        if col_hora_fin >= 0
-        else hora_ini_sec
-    )
-
-    vehiculo_raw = data.iloc[:, col_veh] if col_veh >= 0 else pd.Series("", index=data.index)
-    vehiculo = vehiculo_raw.apply(normalize_vehiculo_key)
-
-    cliente_raw = data.iloc[:, col_cliente] if col_cliente >= 0 else pd.Series("", index=data.index)
-    cliente = cliente_raw.apply(lambda v: "" if pd.isna(v) else str(v).strip())
-
-    km = pd.to_numeric(data.iloc[:, col_km], errors="coerce").fillna(0.0)
-
-    inicio = pd.to_datetime(fecha) + pd.to_timedelta(hora_ini_sec, unit="s")
-    fin = pd.to_datetime(fecha) + pd.to_timedelta(hora_fin_sec, unit="s")
-    minutos = (fin - inicio).dt.total_seconds().div(60).clip(lower=0.0)
-
     division = extraer_division_desde_nombre(path)
-    servicio_ids = [
-        servicio_id_from_components(veh, fec, idx)
-        for idx, (veh, fec) in enumerate(zip(vehiculo.tolist(), fecha.tolist()))
-    ]
+    records: list[dict] = []
+    for idx, row in enumerate(data.itertuples(index=False, name=None), start=header_row + 2):
+        row_values = list(row)
+        if not any(_has_value(v) for v in row_values):
+            continue
 
-    return pd.DataFrame().assign(
-        division=division,
-        vehiculo=vehiculo,
-        inicio=inicio,
-        fin=fin,
-        km=km,
-        minutos=minutos,
-        cliente_site=cliente,
-        servicio_id=servicio_ids,
-        tipo="SERVICIO",
-    )
+        fecha_val = row[col_fecha]
+        try:
+            fecha = date_only_ex2(
+                fecha_val,
+                date_order,
+                raise_on_error=True,
+                row=idx,
+                column=col_fecha + 1,
+            )
+        except InvalidDateComponentError as exc:
+            alt_order = "DMY" if date_order.strip().upper() == "MDY" else "MDY"
+            fecha_alt = date_only_ex2(fecha_val, alt_order)
+            if fecha_alt:
+                fecha = fecha_alt
+            else:
+                raise exc
+
+        hora_ini_val = row[col_hora_ini]
+        hora_ini_sec = time_to_sec_ex(
+            hora_ini_val,
+            raise_on_error=True,
+            row=idx,
+            column=col_hora_ini + 1,
+        )
+
+        if col_hora_fin >= 0:
+            hora_fin_val = row[col_hora_fin]
+            if _has_value(hora_fin_val):
+                hora_fin_sec = time_to_sec_ex(
+                    hora_fin_val,
+                    raise_on_error=True,
+                    row=idx,
+                    column=col_hora_fin + 1,
+                )
+            else:
+                hora_fin_sec = hora_ini_sec
+        else:
+            hora_fin_sec = hora_ini_sec
+
+        vehiculo_raw = row[col_veh] if col_veh >= 0 else ""
+        vehiculo = normalize_vehiculo_key(
+            vehiculo_raw,
+            raise_on_error=col_veh >= 0,
+            row=idx,
+            column=col_veh + 1 if col_veh >= 0 else None,
+        ) or ""
+
+        cliente_val = row[col_cliente] if col_cliente >= 0 else ""
+        cliente = "" if pd.isna(cliente_val) else str(cliente_val).strip()
+
+        km_raw = row[col_km]
+        try:
+            km = float(km_raw) if _has_value(km_raw) else 0.0
+        except (TypeError, ValueError) as exc:
+            raise InvalidNumericComponentError("Kilómetros inválidos", value=km_raw, row=idx, column=col_km + 1) from exc
+
+        inicio = datetime.combine(fecha, _seconds_to_time(hora_ini_sec))
+        fin = datetime.combine(fecha, _seconds_to_time(hora_fin_sec))
+        if fin < inicio:
+            fin = inicio
+
+        minutos = max((fin - inicio).total_seconds() / 60.0, 0.0)
+        servicio_id = servicio_id_from_components(vehiculo, fecha, len(records))
+
+        records.append(
+            {
+                "division": division,
+                "vehiculo": vehiculo,
+                "inicio": inicio,
+                "fin": fin,
+                "km": km,
+                "minutos": minutos,
+                "cliente_site": cliente,
+                "servicio_id": servicio_id,
+                "tipo": "SERVICIO",
+            }
+        )
+
+    return pd.DataFrame.from_records(records)
 
 
 def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY"):
@@ -476,23 +597,50 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
         raise ValueError("Visitas: faltan columnas mínimas (Unidad, Fecha/Hora Llegada)")
 
     records: List[dict] = []
-    for row in raw.iloc[header_row + 1 :].itertuples(index=False, name=None):
-        vehiculo_raw = row[col_unidad]
-        vehiculo = normalize_vehiculo_key(vehiculo_raw)
-        if not vehiculo:
+    for idx, row in enumerate(raw.iloc[header_row + 1 :].itertuples(index=False, name=None), start=header_row + 2):
+        row_values = list(row)
+        if not any(_has_value(v) for v in row_values):
             continue
 
-        fecha = date_only_ex2(row[col_fecha], date_order)
-        hora_sec = time_to_sec_ex(row[col_hora])
-        if not fecha:
-            continue
+        vehiculo_raw = row[col_unidad]
+        vehiculo = normalize_vehiculo_key(
+            vehiculo_raw,
+            raise_on_error=True,
+            row=idx,
+            column=col_unidad + 1,
+        )
+
+        try:
+            fecha = date_only_ex2(row[col_fecha], date_order, raise_on_error=True, row=idx, column=col_fecha + 1)
+        except InvalidDateComponentError as exc:
+            alt_order = "DMY" if date_order.strip().upper() == "MDY" else "MDY"
+            fecha_alt = date_only_ex2(row[col_fecha], alt_order)
+            if fecha_alt:
+                fecha = fecha_alt
+            else:
+                raise exc
+        hora_sec = time_to_sec_ex(row[col_hora], raise_on_error=True, row=idx, column=col_hora + 1)
 
         fecha_sal_val = row[col_fecha_sal] if col_fecha_sal >= 0 else None
-        fecha_sal = date_only_ex2(fecha_sal_val, date_order) if fecha_sal_val is not None else None
+        fecha_sal = (
+            date_only_ex2(fecha_sal_val, date_order, raise_on_error=True, row=idx, column=col_fecha_sal + 1)
+            if col_fecha_sal >= 0 and _has_value(fecha_sal_val)
+            else None
+        )
+
         hora_sal_val = row[col_hora_sal] if col_hora_sal >= 0 else None
-        hora_sal_sec = time_to_sec_ex(hora_sal_val) if hora_sal_val is not None else 0
+        hora_sal_sec = (
+            time_to_sec_ex(hora_sal_val, raise_on_error=True, row=idx, column=col_hora_sal + 1)
+            if col_hora_sal >= 0 and _has_value(hora_sal_val)
+            else 0
+        )
+
         duracion_val = row[col_duracion] if col_duracion >= 0 else None
-        duracion = time_to_sec_ex(duracion_val) if duracion_val is not None else 0
+        duracion = (
+            time_to_sec_ex(duracion_val, raise_on_error=True, row=idx, column=col_duracion + 1)
+            if col_duracion >= 0 and _has_value(duracion_val)
+            else 0
+        )
 
         inicio_abs = datetime.combine(fecha, _seconds_to_time(hora_sec))
         if fecha_sal or hora_sal_sec:
@@ -575,4 +723,9 @@ __all__ = [
     "read_visitas_excel",
     "build_timeline",
     "CatCategory",
+    "InvalidVehicleKeyError",
+    "InvalidDateComponentError",
+    "InvalidTimeComponentError",
+    "InvalidNumericComponentError",
+    "NormalizationError",
 ]
