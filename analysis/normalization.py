@@ -21,10 +21,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from itertools import repeat
+import logging
 import os
 import re
 import unicodedata
 from typing import Iterable, List, Optional, Sequence
+
+
+logger = logging.getLogger(__name__)
 
 
 ACCENT_REPLACEMENTS = str.maketrans(
@@ -131,7 +135,9 @@ def find_header_row(
         row = data.iloc[idx].fillna("")
         normalized = {normalize(v) for v in row.tolist()}
         if all(key in normalized for key in required_normalized_headers):
+            logger.debug("find_header_row: cabecera encontrada en fila %s", idx)
             return idx
+    logger.debug("find_header_row: usando fila por defecto %s", default_row if default_row is not None else 0)
     return default_row if default_row is not None else 0
 
 
@@ -339,7 +345,9 @@ def find_header_row_visitas(data: "pandas.DataFrame", default_row: int = 7) -> i
     for idx in range(min(100, len(data))):
         row = {normalize(v) for v in data.iloc[idx].fillna("").tolist()}
         if row & aliases and row & fecha_aliases and row & hora_aliases and row & cat_aliases:
+            logger.debug("find_header_row_visitas: cabecera encontrada en fila %s", idx)
             return idx
+    logger.debug("find_header_row_visitas: usando fila por defecto %s", default_row)
     return default_row
 
 
@@ -351,7 +359,9 @@ def find_header_row_cargas(data: "pandas.DataFrame", default_row: int = 0) -> in
     for idx in range(min(100, len(data))):
         row = {normalize(v) for v in data.iloc[idx].fillna("").tolist()}
         if row & unidad_aliases and row & fecha_aliases and row & division_aliases:
+            logger.debug("find_header_row_cargas: cabecera encontrada en fila %s", idx)
             return idx
+    logger.debug("find_header_row_cargas: usando fila por defecto %s", default_row)
     return default_row
 
 
@@ -396,12 +406,24 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
     header_row = find_header_row(raw)
 
+    logger.info("División: cabecera detectada en fila %s", header_row)
+
     col_km = find_col_any_in_row(raw, header_row, ["Kilómetros", "KMS", "Kilometros"])
     col_fecha = find_col_any_in_row(raw, header_row, ["Fecha Inicio", "F Servicio", "Fecha", "F_Servicio"])
     col_hora_ini = find_col_any_in_row(raw, header_row, ["Hora Inicio", "HoraInicial", "Inicio", "HI"])
     col_hora_fin = find_col_any_in_row(raw, header_row, ["Hora Fin", "HoraFinal", "Fin", "HF"])
     col_veh = find_col_any_in_row(raw, header_row, ["Vehiculo", "Vehículo", "Unidad", "Carro", "KCarro"])
     col_cliente = find_col_any_in_row(raw, header_row, ["Cliente / SiteVisit", "Cliente", "Cliente SiteVisit"])
+
+    logger.debug(
+        "División: columnas detectadas km=%s fecha=%s hora_ini=%s hora_fin=%s vehiculo=%s cliente=%s",
+        col_km,
+        col_fecha,
+        col_hora_ini,
+        col_hora_fin,
+        col_veh,
+        col_cliente,
+    )
 
     required = [col_km, col_fecha, col_hora_ini]
     if any(idx < 0 for idx in required):
@@ -416,8 +438,12 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     ).dt.date
 
     valid_rows = fecha.notna()
+    discarded_invalid_fecha = int((~valid_rows).sum())
     data = data.loc[valid_rows].reset_index(drop=True)
     fecha = fecha.loc[valid_rows].reset_index(drop=True)
+
+    if discarded_invalid_fecha:
+        logger.info("División: %s filas descartadas por fechas inválidas", discarded_invalid_fecha)
 
     hora_ini_sec = data.iloc[:, col_hora_ini].apply(time_to_sec_ex)
     hora_fin_sec = (
@@ -444,7 +470,7 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
         for idx, (veh, fec) in enumerate(zip(vehiculo.tolist(), fecha.tolist()))
     ]
 
-    return pd.DataFrame().assign(
+    df = pd.DataFrame().assign(
         division=division,
         vehiculo=vehiculo,
         inicio=inicio,
@@ -456,12 +482,17 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
         tipo="SERVICIO",
     )
 
+    logger.info("División: %s filas válidas procesadas", len(df))
+    return df
+
 
 def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY"):
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
     header_row = find_header_row_visitas(raw)
+
+    logger.info("Visitas: cabecera detectada en fila %s", header_row)
 
     col_unidad = find_col_any_in_row(raw, header_row, ["Unidad", "Económico", "Economico", "No Economico", "NoEconomico"])
     col_fecha = find_col_any_in_row(raw, header_row, ["Fecha Llegada", "FechaLlegada", "Fecha Arribo", "Fecha", "F Llegada"])
@@ -472,19 +503,40 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
     col_cat = find_col_any_in_row(raw, header_row, ["Categoría", "Categoria", "Categoría Visita", "Tipo", "Tipo Visita"])
     col_sitio = find_col_any_in_row(raw, header_row, ["Sitio", "Lugar", "Ubicacion", "Ubicación", "Punto", "Destino"])
 
+    logger.debug(
+        "Visitas: columnas detectadas unidad=%s fecha=%s hora=%s fecha_sal=%s hora_sal=%s duracion=%s cat=%s sitio=%s",
+        col_unidad,
+        col_fecha,
+        col_hora,
+        col_fecha_sal,
+        col_hora_sal,
+        col_duracion,
+        col_cat,
+        col_sitio,
+    )
+
     if col_unidad < 0 or col_fecha < 0 or col_hora < 0:
         raise ValueError("Visitas: faltan columnas mínimas (Unidad, Fecha/Hora Llegada)")
 
     records: List[dict] = []
+    total_rows = len(raw) - header_row - 1
+    skipped_no_vehicle = 0
+    skipped_no_fecha = 0
+    skipped_short_duration = 0
+
     for row in raw.iloc[header_row + 1 :].itertuples(index=False, name=None):
         vehiculo_raw = row[col_unidad]
         vehiculo = normalize_vehiculo_key(vehiculo_raw)
         if not vehiculo:
+            skipped_no_vehicle += 1
+            logger.debug("Visitas: fila descartada por unidad vacía/raw=%r", vehiculo_raw)
             continue
 
         fecha = date_only_ex2(row[col_fecha], date_order)
         hora_sec = time_to_sec_ex(row[col_hora])
         if not fecha:
+            skipped_no_fecha += 1
+            logger.debug("Visitas: fila descartada por fecha inválida/raw=%r", row[col_fecha])
             continue
 
         fecha_sal_val = row[col_fecha_sal] if col_fecha_sal >= 0 else None
@@ -504,6 +556,8 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
             fin_abs = inicio_abs
 
         if (fin_abs - inicio_abs).total_seconds() < 60:
+            skipped_short_duration += 1
+            logger.debug("Visitas: fila descartada por duración menor a 60 segundos")
             continue
 
         cat_val = row[col_cat] if col_cat >= 0 else None
@@ -523,13 +577,25 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
             }
         )
 
-    return pd.DataFrame.from_records(records)
+    valid_df = pd.DataFrame.from_records(records)
+    processed = len(valid_df)
+    logger.info(
+        "Visitas: %s filas válidas de %s (sin unidad: %s, sin fecha: %s, duración<60s: %s)",
+        processed,
+        total_rows,
+        skipped_no_vehicle,
+        skipped_no_fecha,
+        skipped_short_duration,
+    )
+
+    return valid_df
 
 
 def build_timeline(divisiones, visitas):
     pd = _require_pandas()
     eventos = []
     if divisiones is not None and len(divisiones):
+        logger.info("Timeline: agregando %s servicios", len(divisiones))
         eventos.append(divisiones)
     if visitas is not None and len(visitas):
         visitas_norm = visitas.assign(
@@ -550,13 +616,16 @@ def build_timeline(divisiones, visitas):
             index=visitas_norm.index,
         )
 
-        eventos.append(visitas_norm.assign(servicio_id=servicio_ids))
+        visitas_df = visitas_norm.assign(servicio_id=servicio_ids)
+        eventos.append(visitas_df)
+        logger.info("Timeline: agregando %s visitas", len(visitas_df))
 
     if not eventos:
         return pd.DataFrame()
 
     timeline = pd.concat(eventos, ignore_index=True)
     timeline = timeline.sort_values(["vehiculo", "inicio"]).reset_index(drop=True)
+    logger.info("Timeline: total de eventos combinados %s", len(timeline))
     return timeline
 
 

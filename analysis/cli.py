@@ -10,6 +10,7 @@ Usage example::
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from pathlib import Path
 from typing import Optional
@@ -22,8 +23,35 @@ def _env_or_default(name: str, default: Optional[str]) -> Optional[str]:
     return value if value else default
 
 
+def configure_logging(*, verbose: bool = False, silent: bool = False) -> None:
+    """Configurar logging con un formato consistente.
+
+    Args:
+        verbose: Activa nivel DEBUG.
+        silent: Reduce la salida a WARNING+.
+    """
+
+    if verbose and silent:
+        raise ValueError("Los modos verbose y silent son mutuamente excluyentes")
+
+    if verbose:
+        level = logging.DEBUG
+    elif silent:
+        level = logging.WARNING
+    else:
+        level = logging.INFO
+
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generar tabla de línea de tiempo/Gantt desde reportes Excel")
+    verbosity = parser.add_mutually_exclusive_group()
+    verbosity.add_argument("--verbose", action="store_true", help="Habilitar salida detallada (DEBUG)")
+    verbosity.add_argument("--silent", action="store_true", help="Reducir salida a solo advertencias/errores")
     parser.add_argument(
         "--division-file",
         dest="division_file",
@@ -52,6 +80,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
+    configure_logging(verbose=args.verbose, silent=args.silent)
     if not args.output_csv and not args.output_excel:
         raise SystemExit("--output-csv o --output-excel es obligatorio")
     if not args.division_file:
