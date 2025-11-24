@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from itertools import repeat
 import os
+from pathlib import Path
 import re
 import unicodedata
 from typing import Iterable, List, Optional, Sequence
@@ -390,10 +391,55 @@ def _require_pandas():
     return pd
 
 
+def _validate_excel_path(path: str | os.PathLike[str]) -> Path:
+    excel_path = Path(path)
+    if not excel_path.exists():
+        raise FileNotFoundError(
+            f"No se encontró el archivo Excel '{excel_path}'. Verifica la ruta y que el archivo no haya sido movido."
+        )
+    if not excel_path.is_file():
+        raise IsADirectoryError(
+            f"La ruta '{excel_path}' no apunta a un archivo. Selecciona un archivo Excel válido con extensión soportada."
+        )
+
+    allowed_extensions = {".xls", ".xlsx", ".xlsm", ".xlsb", ".ods"}
+    if excel_path.suffix.lower() not in allowed_extensions:
+        raise ValueError(
+            f"Extensión no soportada para '{excel_path.name}'. Usa un Excel con alguna de estas extensiones: {', '.join(sorted(allowed_extensions))}."
+        )
+
+    if not os.access(excel_path, os.R_OK):
+        raise PermissionError(
+            f"No hay permisos de lectura para '{excel_path}'. Ajusta los permisos o copia el archivo a una ubicación accesible."
+        )
+
+    return excel_path
+
+
+def _read_excel_with_checks(pd, path: str | os.PathLike[str], parsed_sheet):
+    excel_path = _validate_excel_path(path)
+    try:
+        return pd.read_excel(excel_path, sheet_name=parsed_sheet, header=None)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"El archivo '{excel_path}' ya no está disponible. Confirma que no fue movido o borrado mientras se intentaba leer."
+        ) from exc
+    except PermissionError as exc:
+        raise PermissionError(
+            f"No se pudo leer '{excel_path}' por falta de permisos. Cierra otras aplicaciones que lo estén usando o corrige los permisos."
+        ) from exc
+    except ValueError as exc:
+        raise ValueError(
+            f"No se pudo abrir el Excel '{excel_path}'. Verifica que la hoja '{parsed_sheet}' exista y que el archivo no esté corrupto."
+        ) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        raise RuntimeError(f"Error inesperado al abrir el Excel '{excel_path}': {exc}") from exc
+
+
 def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str | None = None):
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
-    raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
+    raw = _read_excel_with_checks(pd, path, parsed_sheet)
     header_row = find_header_row(raw)
 
     col_km = find_col_any_in_row(raw, header_row, ["Kilómetros", "KMS", "Kilometros"])
@@ -460,7 +506,7 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
 def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY"):
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
-    raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
+    raw = _read_excel_with_checks(pd, path, parsed_sheet)
     header_row = find_header_row_visitas(raw)
 
     col_unidad = find_col_any_in_row(raw, header_row, ["Unidad", "Económico", "Economico", "No Economico", "NoEconomico"])
