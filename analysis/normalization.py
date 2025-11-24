@@ -406,40 +406,54 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     if any(idx < 0 for idx in required):
         raise ValueError("No se pudieron detectar las columnas obligatorias (kilómetros, fecha, hora inicio)")
 
-    records: List[dict] = []
-    for row in raw.iloc[header_row + 1 :].itertuples(index=False, name=None):
-        fecha = date_only_ex2(row[col_fecha], date_order)
-        if not fecha:
-            continue
-        hora_ini_val = row[col_hora_ini]
-        hora_ini_sec = time_to_sec_ex(hora_ini_val)
-        hora_fin_sec = time_to_sec_ex(row[col_hora_fin]) if col_hora_fin >= 0 else hora_ini_sec
-        vehiculo_raw = row[col_veh] if col_veh >= 0 else ""
-        vehiculo = normalize_vehiculo_key(vehiculo_raw) if vehiculo_raw != "" else ""
-        cliente_val = row[col_cliente] if col_cliente >= 0 else None
-        cliente = str(cliente_val).strip() if cliente_val is not None and not pd.isna(cliente_val) else ""
-        km_val = row[col_km]
-        km = float(km_val) if pd.notna(km_val) else 0.0
+    data = raw.iloc[header_row + 1 :].reset_index(drop=True)
 
-        start_dt = datetime.combine(fecha, _seconds_to_time(hora_ini_sec))
-        end_dt = datetime.combine(fecha, _seconds_to_time(hora_fin_sec))
-        minutes = max(0.0, (end_dt - start_dt).total_seconds() / 60.0)
+    fecha = pd.to_datetime(
+        data.iloc[:, col_fecha],
+        errors="coerce",
+        dayfirst=date_order.strip().upper() == "DMY",
+    ).dt.date
 
-        records.append(
-            {
-                "division": extraer_division_desde_nombre(path),
-                "vehiculo": vehiculo,
-                "inicio": start_dt,
-                "fin": end_dt,
-                "km": km,
-                "minutos": minutes,
-                "cliente_site": cliente,
-                "servicio_id": servicio_id_from_components(vehiculo, fecha, len(records)),
-                "tipo": "SERVICIO",
-            }
-        )
+    valid_rows = fecha.notna()
+    data = data.loc[valid_rows].reset_index(drop=True)
+    fecha = fecha.loc[valid_rows].reset_index(drop=True)
 
-    return pd.DataFrame.from_records(records)
+    hora_ini_sec = data.iloc[:, col_hora_ini].apply(time_to_sec_ex)
+    hora_fin_sec = (
+        data.iloc[:, col_hora_fin].apply(time_to_sec_ex)
+        if col_hora_fin >= 0
+        else hora_ini_sec
+    )
+
+    vehiculo_raw = data.iloc[:, col_veh] if col_veh >= 0 else pd.Series("", index=data.index)
+    vehiculo = vehiculo_raw.apply(normalize_vehiculo_key)
+
+    cliente_raw = data.iloc[:, col_cliente] if col_cliente >= 0 else pd.Series("", index=data.index)
+    cliente = cliente_raw.apply(lambda v: "" if pd.isna(v) else str(v).strip())
+
+    km = pd.to_numeric(data.iloc[:, col_km], errors="coerce").fillna(0.0)
+
+    inicio = pd.to_datetime(fecha) + pd.to_timedelta(hora_ini_sec, unit="s")
+    fin = pd.to_datetime(fecha) + pd.to_timedelta(hora_fin_sec, unit="s")
+    minutos = (fin - inicio).dt.total_seconds().div(60).clip(lower=0.0)
+
+    division = extraer_division_desde_nombre(path)
+    servicio_ids = [
+        servicio_id_from_components(veh, fec, idx)
+        for idx, (veh, fec) in enumerate(zip(vehiculo.tolist(), fecha.tolist()))
+    ]
+
+    return pd.DataFrame().assign(
+        division=division,
+        vehiculo=vehiculo,
+        inicio=inicio,
+        fin=fin,
+        km=km,
+        minutos=minutos,
+        cliente_site=cliente,
+        servicio_id=servicio_ids,
+        tipo="SERVICIO",
+    )
 
 
 def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY"):
