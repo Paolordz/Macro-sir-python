@@ -444,6 +444,8 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
     header_row = find_header_row(raw)
 
+    division_name = extraer_division_desde_nombre(path)
+
     col_km = find_col_any_in_row(raw, header_row, ["Kilómetros", "KMS", "Kilometros"])
     col_fecha = find_col_any_in_row(raw, header_row, ["Fecha Inicio", "F Servicio", "Fecha", "F_Servicio"])
     col_hora_ini = find_col_any_in_row(raw, header_row, ["Hora Inicio", "HoraInicial", "Inicio", "HI"])
@@ -457,11 +459,19 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
 
     data = raw.iloc[header_row + 1 :].reset_index(drop=True)
 
-    fecha = pd.to_datetime(
-        data.iloc[:, col_fecha],
-        errors="coerce",
-        dayfirst=date_order.strip().upper() == "DMY",
-    ).dt.date
+        records.append(
+            {
+                "division": division_name,
+                "vehiculo": vehiculo,
+                "inicio": start_dt,
+                "fin": end_dt,
+                "km": km,
+                "minutos": minutes,
+                "cliente_site": cliente,
+                "servicio_id": servicio_id_from_components(vehiculo, fecha, len(records)),
+                "tipo": "SERVICIO",
+            }
+        )
 
     valid_rows = fecha.notna()
     data = data.loc[valid_rows].reset_index(drop=True)
