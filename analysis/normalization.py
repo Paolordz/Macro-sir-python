@@ -391,6 +391,54 @@ def _require_pandas():
 
 
 def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str | None = None):
+    """Lee el reporte de División tal como lo hacía el macro VBA.
+
+    Parameters
+    ----------
+    path:
+        Ruta al archivo Excel a procesar. Se admite cualquier extensión
+        que ``pandas.read_excel`` soporte (``.xls``, ``.xlsx``). El nombre
+        del archivo se usa para inferir la división cuando no hay columna
+        explícita.
+    date_order:
+        Orden esperado para las fechas escritas como texto. Valores
+        admitidos: ``"MDY"`` (mes/día/año) o ``"DMY"`` (día/mes/año),
+        replicando el parámetro ``DateOrder`` del VBA.
+    sheet_name:
+        Nombre o índice de la hoja a leer. Si es ``None`` se toma la
+        primera hoja, igual que el macro original.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame normalizado con columnas ``division``, ``vehiculo``,
+        ``inicio``, ``fin``, ``km``, ``minutos``, ``cliente_site``,
+        ``servicio_id`` y ``tipo``.
+
+    Raises
+    ------
+    ValueError
+        Si no se encuentran las columnas mínimas (kilómetros, fecha, hora
+        inicio), reproduciendo la validación temprana del VBA.
+
+    Notes
+    -----
+    * Se escanean las primeras filas para detectar el encabezado con las
+      heurísticas de ``find_header_row``.
+    * Las horas en formato decimal de Excel o en strings flexibles se
+      convierten mediante :func:`time_to_sec_ex`, igual que en VBA.
+    * Las fechas vacías o inválidas se descartan para mantener la lógica
+      del macro que ignoraba filas incompletas.
+
+    Examples
+    --------
+    >>> df = read_division_excel("division.xlsx", date_order="DMY")
+    >>> df.head()[["vehiculo", "inicio", "km"]]
+         vehiculo     inicio     km
+    0    ABC123   2023-01-05  12.5
+    1    XYZ999   2023-01-05   8.0
+    """
+
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
@@ -458,6 +506,45 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
 
 
 def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: str = "DMY"):
+    """Normaliza el reporte de Visitas con compatibilidad VBA.
+
+    Parameters
+    ----------
+    path:
+        Ruta al archivo Excel de visitas.
+    sheet_name:
+        Nombre o índice de la hoja a leer; ``None`` toma la primera.
+    date_order:
+        Orden para fechas de texto, ``"DMY"`` o ``"MDY"``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Registros de visitas con columnas ``vehiculo``, ``inicio``,
+        ``fin``, ``categoria``, ``sitio`` y ``tipo``.
+
+    Raises
+    ------
+    ValueError
+        Si faltan columnas mínimas (Unidad, Fecha/Hora Llegada).
+
+    Notes
+    -----
+    * Las horas y duraciones se interpretan igual que en ``time_to_sec_ex``
+      (acepta ``hh:mm[:ss]`` o decimales de Excel) para mantener
+      compatibilidad con los registros históricos.
+    * Registros con duración inferior a un minuto se descartan, replicando
+      el filtro del VBA.
+
+    Examples
+    --------
+    >>> visitas = read_visitas_excel("visitas.xlsx", date_order="MDY")
+    >>> visitas.loc[0, ["vehiculo", "categoria"]]
+    vehiculo    ABC123
+    categoria     Patio
+    Name: 0, dtype: object
+    """
+
     pd = _require_pandas()
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
@@ -527,6 +614,31 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
 
 
 def build_timeline(divisiones, visitas):
+    """Une los servicios y visitas en una tabla cronológica.
+
+    Parameters
+    ----------
+    divisiones:
+        DataFrame producido por :func:`read_division_excel`. Puede ser
+        ``None`` o vacío.
+    visitas:
+        DataFrame producido por :func:`read_visitas_excel`. Puede ser
+        ``None`` o vacío.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Eventos combinados ordenados por ``vehiculo`` e ``inicio``. Los
+        campos de visitas se rellenan con ``km=0`` y se calculan minutos y
+        ``servicio_id`` con la misma lógica que el VBA (vehículo + fecha +
+        secuencial).
+
+    Notes
+    -----
+    El algoritmo sigue el comportamiento del macro original: cuando un
+    reporte falta, simplemente se omite; no se generan filas sintéticas.
+    """
+
     pd = _require_pandas()
     eventos = []
     if divisiones is not None and len(divisiones):
