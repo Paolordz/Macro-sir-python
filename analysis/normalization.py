@@ -392,7 +392,7 @@ def _require_pandas():
 
 
 def _validate_excel_path(path: str | os.PathLike[str]) -> Path:
-    excel_path = Path(path)
+    excel_path = Path(path).expanduser()
     if not excel_path.exists():
         raise FileNotFoundError(
             f"No se encontró el archivo Excel '{excel_path}'. Verifica la ruta y que el archivo no haya sido movido."
