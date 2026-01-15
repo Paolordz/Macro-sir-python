@@ -490,6 +490,9 @@ def _build_division_records(rows: "pandas.DataFrame", path: str) -> "pandas.Data
     fecha = rows["fecha"]
     inicio = pd.to_datetime(fecha) + pd.to_timedelta(rows["hora_ini_sec"], unit="s")
     fin = pd.to_datetime(fecha) + pd.to_timedelta(rows["hora_fin_sec"], unit="s")
+    mask = fin < inicio
+    if mask.any():
+        fin = fin + pd.to_timedelta(mask.astype(int), unit="D")
     minutos = (fin - inicio).dt.total_seconds().div(60).clip(lower=0.0)
 
     division = extraer_division_desde_nombre(path)
@@ -527,6 +530,7 @@ def _process_division_dataframe(
 ) -> "pandas.DataFrame":
     """Orchestrate the división import pipeline for unit testing."""
 
+    date_order = _validate_date_order(date_order)
     header_row = _detect_division_header_row(raw)
     column_map = _map_division_columns(raw, header_row)
     valid_rows = _validate_division_rows(raw, header_row, column_map, date_order=date_order)
@@ -543,6 +547,18 @@ def _require_pandas():
             "pandas is required for Excel parsing functions; install it with 'pip install pandas openpyxl'."
         ) from exc
     return pd
+
+
+def _validate_date_order(date_order: str) -> str:
+    normalized = (date_order or "").strip().upper()
+    if normalized not in {"MDY", "DMY"}:
+        raise ValueError(f"Formato de fecha no soportado: {date_order!r}. Use 'MDY' o 'DMY'.")
+    return normalized
+
+
+def _datetime_from_date_seconds(fecha: date, seconds: int) -> datetime:
+    base = datetime.combine(fecha, time.min)
+    return base + timedelta(seconds=int(seconds))
 
 
 def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str | None = None):
@@ -595,6 +611,7 @@ def read_division_excel(path: str, *, date_order: str = "MDY", sheet_name: str |
     """
 
     pd = _require_pandas()
+    date_order = _validate_date_order(date_order)
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
     return _process_division_dataframe(raw, path=path, date_order=date_order)
@@ -641,6 +658,7 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
     """
 
     pd = _require_pandas()
+    date_order = _validate_date_order(date_order)
     parsed_sheet = 0 if sheet_name is None else sheet_name
     raw = pd.read_excel(path, sheet_name=parsed_sheet, header=None)
     header_row = find_header_row_visitas(raw)
@@ -676,14 +694,17 @@ def read_visitas_excel(path: str, *, sheet_name: str | None = None, date_order: 
         duracion_val = row[col_duracion] if col_duracion >= 0 else None
         duracion = time_to_sec_ex(duracion_val) if duracion_val is not None else 0
 
-        inicio_abs = datetime.combine(fecha, _seconds_to_time(hora_sec))
+        inicio_abs = _datetime_from_date_seconds(fecha, hora_sec)
         if fecha_sal or hora_sal_sec:
             fecha_dest = fecha_sal or fecha
-            fin_abs = datetime.combine(fecha_dest, _seconds_to_time(hora_sal_sec))
+            fin_abs = _datetime_from_date_seconds(fecha_dest, hora_sal_sec)
         elif duracion:
             fin_abs = inicio_abs + timedelta(seconds=duracion)
         else:
             fin_abs = inicio_abs
+
+        if fin_abs < inicio_abs:
+            fin_abs = fin_abs + timedelta(days=1)
 
         if (fin_abs - inicio_abs).total_seconds() < 60:
             continue
