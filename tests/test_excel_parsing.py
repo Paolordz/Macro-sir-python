@@ -101,6 +101,20 @@ def test_division_record_builder_preserves_metadata(sample_division_file: Path):
     assert records["servicio_id"].iloc[0].endswith("-000")
 
 
+def test_division_over_midnight_rolls_to_next_day():
+    raw = pd.DataFrame(
+        [
+            ["Vehículo", "Kilómetros", "Fecha Inicio", "Hora Inicio", "Hora Fin", "Cliente"],
+            ["AA-01", 10, "15/01/2024", "23:30", "01:00", "Cliente A"],
+        ]
+    )
+    records = _process_division_dataframe(raw, path="Division Norte.xlsx", date_order="DMY")
+
+    assert len(records) == 1
+    delta_minutes = (records.loc[0, "fin"] - records.loc[0, "inicio"]).total_seconds() / 60.0
+    assert delta_minutes == 90.0
+
+
 def test_cargas_header_detection():
     df = pd.DataFrame(
         [
@@ -213,6 +227,22 @@ def test_cli_writes_outputs_and_uses_date_orders(sample_division_file: Path, sam
 
     csv_df = pd.read_csv(csv_out)
     assert {"vehiculo", "inicio", "fin"}.issubset(csv_df.columns)
+
+
+def test_visitas_over_midnight_rolls_to_next_day(tmp_path: Path):
+    data = pd.DataFrame(
+        [
+            ["Unidad", "Fecha Llegada", "Hora Llegada", "Fecha Salida", "Hora Salida", "Categoría", "Sitio"],
+            ["AA-01", "15/01/2024", "23:30", "15/01/2024", "01:00", "Patio", "Patio Central"],
+        ]
+    )
+    path = tmp_path / "visitas_midnight.xlsx"
+    data.to_excel(path, header=False, index=False)
+
+    visitas_df = read_visitas_excel(path, date_order="DMY")
+    assert len(visitas_df) == 1
+    delta_minutes = (visitas_df.loc[0, "fin"] - visitas_df.loc[0, "inicio"]).total_seconds() / 60.0
+    assert delta_minutes == 90.0
 
 
 @pytest.mark.parametrize(
